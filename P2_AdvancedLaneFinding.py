@@ -126,7 +126,7 @@ image_list = ['straight_lines1.jpg',
               'test5.jpg',
               'test6.jpg']
 
-input_image = "test_images"+os.sep + image_list[1]
+input_image = "test_images"+os.sep + image_list[5]
 
 
 SHOW_STEPS = True
