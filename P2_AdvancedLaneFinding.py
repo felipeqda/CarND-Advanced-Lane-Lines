@@ -126,11 +126,11 @@ image_list = ['straight_lines1.jpg',
               'test5.jpg',
               'test6.jpg']
 
-input_image = "test_images"+os.sep + image_list[0]
+input_image = "test_images"+os.sep + image_list[1]
 
 
 SHOW_STEPS = True
-sobel_kernel = 17
+sobel_kernel = 7
 
 #take image name, make a directory for each, for output (used if plotting is on)
 img_basename = os.path.basename(input_image).split('.jpg')[0]    
@@ -228,10 +228,8 @@ mask = S_mask | gradx_mask | R_mask
 #compute a perspective transform M, given source and destination points:
     
 #based on a Ny x Nx = 720 x 1280 image (straight_lines.jpg)    
-pts_img = np.float32([[192,720], [600+1, 445],
-                      [680-4, 445],[1118, 720]])
-
-aa = np.float32([[192,720,1], [601,445,1],  [676,445,1], [1118,720,1]]).T
+pts_img = np.float32([[190+1,720], [600+1, 445],
+                      [680-2, 445],[1120-2, 720]])
 
 #make closed polygons for plotting
 x_img, y_img = closePolygon(pts_img) 
