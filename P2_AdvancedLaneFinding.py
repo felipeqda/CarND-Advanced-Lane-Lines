@@ -107,8 +107,6 @@ def calibrateCamera(FORCE_REDO=False):
     # return calibration matrix and distortion coefficients to be used with
     # cv2.undistort(image, cal_mtx, dist_coef, None, cal_mtx)
     return cal_mtx, dist_coef
-
-
 # ------------------------------
 
 cal_mtx, dist_coef = calibrateCamera(FORCE_REDO=False)
@@ -127,13 +125,14 @@ image_list = ['straight_lines1.jpg',
               'test5.jpg',
               'test6.jpg']
 
-input_image = "test_images" + os.sep + image_list[5] #5!  #indices [0-7]
+## INPUTIMAGE
+input_image = "test_images" + os.sep + image_list[2] #5!  #indices [0-7]
 
 
-#keywords to control level of output (set True for step by step analysis of image/frame)
-SHOW_COLOR_GRADIENT = False  #show color channel analysis and gradients
-SHOW_WARP = False            #show warping
-SHOW_FIT = True              #show pixel detection and fitting step
+# keywords to control level of output (set True for step by step analysis of image/frame)
+SHOW_COLOR_GRADIENT = False  # show color channel analysis and gradients
+SHOW_WARP = False            # show warping
+SHOW_FIT = True              # show pixel detection and fitting step
 sobel_kernel = 7
 
 # take image name, make a directory for each, for output (used if plotting is on)
@@ -145,6 +144,11 @@ if SHOW_COLOR_GRADIENT:
 # read image and get dimensions
 img_RGB = mpimg.imread(input_image)
 Ny, Nx, _ = np.shape(img_RGB)
+# print image info and plot
+plt.close('all')
+print('')
+print('Input Image file: ', img_basename, 'with dimensions:', img_RGB.shape)
+
 
 """I) apply calibration"""
 img_RGB = cv2.undistort(img_RGB, cal_mtx, dist_coef, None, cal_mtx)
@@ -152,7 +156,7 @@ img_RGB = cv2.undistort(img_RGB, cal_mtx, dist_coef, None, cal_mtx)
 
 """II) color transformations & gradients """
 """II.I ==> verify channels (optional)"""
-#plot detailed analysis (useful to verify properties and select thresholds)
+# plot detailed analysis (useful to verify properties and select thresholds)
 if SHOW_COLOR_GRADIENT:
 
     # compute grayscale image and get basic gradients of it
@@ -166,10 +170,7 @@ if SHOW_COLOR_GRADIENT:
     grad_dir = dir_thresh(img_grayscl, thresh=(0.7, 1.3),
                           sobel_kernel=19, GRAY_INPUT=True)
 
-    # printing image info and plot
-    plt.close('all')
-    print('Image file: ', img_basename, 'with dimensions:', img_RGB.shape)
-
+    # plot grayscale images and gradients
     plotNimg([img_grayscl, grad_x, grad_y, grad_dir],
              ['Grayscale', 'Grad_x', 'Grad_y', 'Grad_dir'],
              ["gray", "gray", "gray", "gray"],
@@ -195,7 +196,7 @@ if SHOW_COLOR_GRADIENT:
              'Input image HLS color channels', fig_num=3)
     plt.savefig(output_dir + img_basename + '_HLS.png')
 
-    # H/S + gradients of H and S
+    # plot H/S + gradients of H and S
     plotNimg([img_HLS[:, :, 0], img_HLS[:, :, 2],
               mag_thresh(img_HLS[:, :, 0], thresh=(10, 100), GRAY_INPUT=True),
               mag_thresh(img_HLS[:, :, 2], thresh=(10, 100), GRAY_INPUT=True)],
@@ -229,32 +230,72 @@ if SHOW_COLOR_GRADIENT:
     # reject_mask = (~roadside_mask) & (~asphalt_mask)
 #plot detailed analysis (useful to verify properties and select thresholds)
 
-#define function to process mask
+
+#define function to process mask using steps tested above
+def lanepxmask(img_RGB):
+    """ Take RGB image, perform necessary color transformation /gradient calculations
+        and output the detected lane pixels mask, alongside an RGB composition of the 3 sub-masks (added)
+        for visualization
+    """
+    # convert to HLS color space
+    img_HLS = cv2.cvtColor(img_RGB, cv2.COLOR_RGB2HLS)
+    # output ==> np.shape(img_HLS) = (Ny, Ny, 3 = [H, L, S])
+
+    # high S value
+    S_thd = (200, 255)
+    S_mask = (img_HLS[:,:,2] > S_thd[0]) & (img_HLS[:,:,2] <= S_thd[1])
+    # high S x-gradient
+    S_gradx_mask = abs_sobel_thresh(img_HLS[:,:,2], orient='x', thresh=(20, 100),
+                                   sobel_kernel=sobel_kernel, GRAY_INPUT=True)
+    # high x-gradient of grayscale image (converted internally)
+    gradx_mask = abs_sobel_thresh(img_RGB, orient='x', thresh=(20, 100), sobel_kernel=sobel_kernel)
+
+    # build main lane pixel mask
+    mask = S_gradx_mask | S_gradx_mask | S_mask
+    # prepare RGB auxiliary for visualization:
+    # stacked individual contributions in RGB = (S, gradx{Gray},  gradx{S})
+    color_binary_mask = np.dstack((S_mask, gradx_mask, S_gradx_mask)) * 255
+
+    return mask, color_binary_mask
+# ------------------------------
 
 
 """III) Perspective Transformations and Region of Interest (ROI) """
 
-# compute a perspective transform M, given source and destination points:
+class Warp2TopDown():
+    """ Compute a perspective transform M, given source and destination points
+        Use a class to provide a warping method and remember the points and relevant info as attributes
+    """
+    # -------------------------------
+    def __init__(self):
+        # based on a Ny x Nx = 720 x 1280 image (straight_lines1/2.jpg)
+        self.pts_img = np.float32([[190 + 1, 720], [600 + 1, 445],
+                              [680 - 2, 445], [1120 - 2, 720]])
 
-# based on a Ny x Nx = 720 x 1280 image (straight_lines1/2.jpg)
-pts_img = np.float32([[190 + 1, 720], [600 + 1, 445],
-                      [680 - 2, 445], [1120 - 2, 720]])
+        self.pts_warp = np.float32([[350, 720], [350, 0], [950, 0], [950, 720]])
 
-# make closed polygons for plotting
-x_img, y_img = closePolygon(pts_img)
+        # direct perspective transform
+        self.M = cv2.getPerspectiveTransform(self.pts_img, self.pts_warp)
+        # inverse perspective transform:
+        self.Minv = cv2.getPerspectiveTransform(self.pts_warp, self.pts_img)
+    # -------------------------------
+    def warp(self, img_in):
+        # Warp an image using the perspective transform, M:
+        Ny, Nx = np.shape(img_in)[0:2]
+        img_warped = cv2.warpPerspective(img_RGB, self.M, (Nx, Ny), flags=cv2.INTER_LINEAR)
+        return img_warped
+    # -------------------------------
+    def unwarp(self, img_in):
+        # Inverse perspective transform, invM:
+        Ny, Nx = np.shape(img_in)[0:2]
+        img_unwarped = cv2.warpPerspective(img_RGB, self.invM, (Nx, Ny), flags=cv2.INTER_LINEAR)
+        return img_unwarped
+# -------------------------------
 
-pts_warp = np.float32([[350, 720], [350, 0], [950, 0], [950, 720]])
-# make a closed polygon for plotting
-x_warp, y_warp = closePolygon(pts_warp)
+Perspective = Warp2TopDown() #object
 
-# direct perspective transform
-M = cv2.getPerspectiveTransform(pts_img, pts_warp)
-# inverse perspective transform:
-Minv = cv2.getPerspectiveTransform(pts_warp, pts_img)
 
-# Warp an image using the perspective transform, M:
-img_warped = cv2.warpPerspective(img_RGB, M, (Nx, Ny), flags=cv2.INTER_LINEAR)
-
+# TODO: check if ROI is useful, make routine or incorporate!
 # Define conversions in x and y from pixels space to meters
 ym_per_pix = 30 / 720  # meters per pixel in y dimension
 xm_per_pix = 3.7 / 600  # meters per pixel in x dimension
@@ -265,17 +306,21 @@ xm_per_pix = 3.7 / 600  # meters per pixel in x dimension
 # auxiliar 3D coordinates are used with z =1 for source and a normalization factor t for the destination
 # transposition is done to facilitate matrix product
 # take the warp region as a reference and expand, to get a rectangle in the top-down view
-xmin, xmax = pts_warp[[0,2],0]
-ymin, ymax = pts_warp[[2,3],1]
+xmin, xmax = Perspective.pts_warp[[0,2],0]
+ymin, ymax = Perspective.pts_warp[[2,3],1]
 pts_warpedROI = np.float32([[xmin-200, ymax, 1], [xmin-200, ymin, 1], [xmax+200, ymin, 1], [xmax+200, ymax, 1]]).T
-pts_ROI = np.tensordot(Minv.T, pts_warpedROI, axes=([0], [0]))
+pts_ROI = np.tensordot(Perspective.Minv.T, pts_warpedROI, axes=([0], [0]))
 pts_ROI = (pts_ROI[0:2, :] / pts_ROI[2, :]).T
 x_wROI, y_wROI = closePolygon(pts_warpedROI[0:2, :].T)
 x_ROI, y_ROI = closePolygon(pts_ROI)
 
-# TODO: save ROI, M, etc
 
-if SHOW_COLOR_GRADIENT:
+if SHOW_WARP:
+    # make closed polygons for plotting
+    x_img, y_img = closePolygon(Perspective.pts_img)
+    x_warp, y_warp = closePolygon(Perspective.pts_warp)
+
+    # do not use the plotNimg() routine, as additional annotations are needed
     fig = plt.figure(figsize=(12, 4.5), num=5)
     fig.canvas.set_window_title('Perspective Transform')
     plt.subplot(1, 2, 1)
@@ -284,80 +329,75 @@ if SHOW_COLOR_GRADIENT:
     plt.plot(x_ROI, y_ROI, 'b')
     plt.title('Input Image')
     plt.subplot(1, 2, 2)
-    plt.imshow(img_warped)
+    plt.imshow(Perspective.warp(img_RGB))
     plt.plot(x_warp, y_warp, 'r--')
     plt.plot(x_wROI, y_wROI, 'b')
     plt.title('Warped "top-down" Image')
     plt.savefig(output_dir + img_basename + '_warp.png')
 
+
 """IV) Get restricted and warped detection masks"""
 
-mask_img = restrict2ROI(img_RGB, pts_ROI)
-mask_ROI = restrict2ROI(255 * np.uint8(mask), pts_ROI)
-mask_warp = cv2.warpPerspective(mask_ROI, M, (Nx, Ny), flags=cv2.INTER_LINEAR)
-
+# A) detect before warp
 if SHOW_COLOR_GRADIENT:
-    # Stack each channel to view their individual contributions in R/G/B
-    color_binary = np.dstack((Sx_mask, gradx_mask, S_mask)) * 255
+    # get mask and stacked individual contributions in RGB (S, Gray-gradx, S-gradx)
+    mask, c_bin = lanepxmask(img_RGB)
+    # restrict to ROI
+    mask_inROI = restrict2ROI(255 * np.uint8(mask), pts_ROI)
+    # warp detection mask
+    mask_warp = Perspective.warp(mask_inROI)
 
-    plotNimg([color_binary, mask, mask_ROI, mask_warp],
-             ['Masks', 'Output (+ masks)', 'ROI-restricted', 'Warped'],
+    # plot the image-domain detection masks (separate by contribution), ROI-restricted masks and warped mask
+    plotNimg([c_bin, mask, mask_inROI, mask_warp],
+             ['Mask components', 'Output mask', 'ROI-restricted', 'Warped'],
              [None, "gray", "gray", "gray"],
              'Lane masks', fig_num=6)
+    plt.savefig(output_dir + img_basename + '_masks-img.png')
+
+# B) warp before detect ==> less blurry
+#get warped RGB image
+imgRGB_warped = Perspective.warp(img_RGB)
+mask_warped, cbin_warped = lanepxmask(imgRGB_warped)
 
 
-# warp before detect ==> less blurry
-S_warp = cv2.warpPerspective(img_HLS[:,:,2], M, (Nx, Ny), flags=cv2.INTER_LINEAR)
-# high S value
-S_thd = (200, 255)
-S_mask2 = (S_warp > S_thd[0]) & (S_warp <= S_thd[1])
-# high S x-gradient
-Sx_mask2 = abs_sobel_thresh(S_warp, orient='x', thresh=(20, 100), sobel_kernel=sobel_kernel, GRAY_INPUT=True)
-# high x-gradient
-gradx_mask2 = abs_sobel_thresh(img_warped, orient='x', thresh=(20, 100), sobel_kernel=sobel_kernel)
-
-color_binary_warp = np.dstack((Sx_mask2, gradx_mask2, S_mask2)) * 255
-mask_warp2 = Sx_mask2 | gradx_mask2 | S_mask2
+plotNimg([imgRGB_warped, cbin_warped, mask_warped], ['RGB image', 'Mask components', 'Output mask'],
+             [None, None, "gray"], 'Warped Image and Detection mask', fig_num=7)
+plt.savefig(output_dir +'1'+ img_basename + '_masks-warp.png')
 
 
-plt.close('all')
+"""V) Process mask and get polynomial fit for boundaries """
 
-fig = plt.figure(figsize=(12, 4.5), num=7)
-fig.canvas.set_window_title('Warp before detect?')
-plt.subplot(1, 2, 1)
-plt.imshow(color_binary_warp)
-plt.subplot(1, 2, 2)
-plt.imshow(mask_warp2, cmap = 'gray')
+fig = plt.figure(num=10)
+fig.canvas.set_window_title("Detected lanes: from pixel mask")
+left, right, out_img = find_lane_xy_frommask(mask_warped)
+print('')
+print('Fit from pixel search')
+print('Left fit: ', left.cf)
+print('Right fit: ', right.cf)
+plt.imshow(out_img)
+plt.savefig(output_dir + '2' +img_basename + '_slidingwindowfit.png')
 
+plt.figure(num=11)
+gradx_mask = abs_sobel_thresh(imgRGB_warped, orient='x', thresh=(20, 100), sobel_kernel=sobel_kernel)
+left, right, out_img = find_lane_xy_frommask(255*np.uint8(gradx_mask))
+print('')
+print('Alternative mask')
+print('Left fit: ', left.cf)
+print('Right fit: ', right.cf)
+plt.imshow(out_img)
+plt.savefig(output_dir + '20' +img_basename + '_slidingwindowfit2.png')
+
+
+#find_lane_xy_frompoly(mask_warped, cf1, cf2)
 
 
 # treatment of mask
-mask_in = 255*np.uint8(mask_warp2)
+kernel = np.ones((3, 3), np.uint8)
+# remove noise by applying Morphological open?
+mask_mostreliable = cv2.morphologyEx(255 * np.uint8(mask_warped), cv2.MORPH_OPEN, kernel, iterations=2)
+# perform watershed detection (labels connected components with unique number
+ret, labels = cv2.connectedComponents(mask_mostreliable)
+# get indices which belong to each of the reliable clusters (will not be split by the margin)
+# bins_map [j] contains indices of connected region j
+bins_map = [np.where(labels == j)[0] for j in range(1, np.max(labels))]
 
-kernel = np.ones((3,3),np.uint8)
-erosion = cv2.erode(mask_in,kernel,iterations = 1)
-
-# remove noise by applying Morphological open
-mask_mostreliable = cv2.morphologyEx(mask_in, cv2.MORPH_OPEN, kernel, iterations = 2)
-
-points_SCORE = np.zeros([Ny, Nx], dtype=np.uint8)
-points_SCORE +=  mask_in//255 #score 1 to points in mask
-points_SCORE +=  10 * (cv2.morphologyEx(mask_in, cv2.MORPH_OPEN, kernel, iterations = 1)//255)
-points_SCORE +=  20 * (cv2.morphologyEx(mask_in, cv2.MORPH_OPEN, kernel, iterations = 2)//255)
-
-
-
-plt.figure(num=0)
-left, right, out_img = find_lane_xy_frommask(mask_mostreliable)
-print('Left fit: ', left.cf)
-print('Right fit: ', right.cf)
-plt.imshow(out_img)
-
-plt.figure(num=1)
-left, right, out_img = find_lane_xy_frommask(255*np.uint8(gradx_mask2))
-print('Left fit: ', left.cf)
-print('Right fit: ', right.cf)
-plt.imshow(out_img)
-
-
-#find_lane_xy_frompoly(mask_in, cf1, cf2)

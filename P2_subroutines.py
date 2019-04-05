@@ -14,6 +14,7 @@ import numpy as np
 import matplotlib.image as mpimg
 import matplotlib.pyplot as plt
 import cv2
+from pdb import set_trace as stop  # useful for debugging
 
 """------------------------------------------------------------"""
 """ Image display                                              """
@@ -219,14 +220,38 @@ class LaneLine:
 
 # ---------------------------------------------------------------------
 def find_lane_xy_frommask(mask_input, nwindows = 9, margin = 100, minpix = 50, NO_IMG = False):
-    # Take the input mask and perform a sliding window search
-    # Return the coordinates of the located pixels, polynomial coefficients and optionally an image showing the
-    #   windows/detections
-    # Parameters:
-    # nwindows ==> Choose the number of sliding windows
-    # margin ==> Set the width of the windows +/- margin
-    # minpix ==> Set minimum number of pixels found to recenter window
-    # NO_IMG ==> do not calculate the diagnose output image (used in pipeline)
+    """ Take the input mask and perform a sliding window search
+     Return the coordinates of the located pixels, polynomial coefficients and optionally an image showing the
+       windows/detections
+     Parameters:
+     nwindows ==> Choose the number of sliding windows
+     margin ==> Set the width of the windows +/- margin
+     minpix ==> Set minimum number of pixels found to recenter window
+     NO_IMG ==> do not calculate the diagnose output image (used in pipeline)"""
+
+    #convert to byte
+    mask_input = 255*np.uint8(mask_input/np.max(mask_input))
+
+    # treatment of mask
+    kernel = np.ones((3, 3), np.uint8)
+    # remove noise by applying Morphological open?
+    mask_mostreliable = cv2.morphologyEx(255 * np.uint8(mask_input), cv2.MORPH_OPEN, kernel, iterations=2)
+    # perform watershed detection (labels connected components with unique number
+    ret, labels = cv2.connectedComponents(mask_mostreliable)
+    # get indices which belong to each of the reliable clusters (will not be split by the margin)
+    # bins_map [j-1] contains lin/col = yx = [0,1] indices of connected region j ([2, Npts])
+    # take indices of nonzero (defined in line 267 below) so that the indices refer to the same mask
+    region_idx_map = [(labels == j).nonzero() for j in range(1, np.max(labels)+1)]
+
+    # TODO: use or remove
+    # attribute point score?
+    #points_SCORE = np.zeros([Ny, Nx], dtype=np.uint8)
+    #points_SCORE += mask_in // 255  # score 1 to points in mask
+    #points_SCORE += 10 * (cv2.morphologyEx(mask_in, cv2.MORPH_OPEN, kernel, iterations=1) // 255)
+    #points_SCORE += 20 * (cv2.morphologyEx(mask_in, cv2.MORPH_OPEN, kernel, iterations=2) // 255)
+    # ideas:
+    #dist_transform = cv2.distanceTransform(opening, cv2.DIST_L2, 5)
+    #ret, sure_fg = cv2.threshold(dist_transform, 0.7 * dist_transform.max(), 255, 0)
 
     # Take a "histogram" (x-profile) of the bottom half of the image
     histogram = np.sum(mask_input[mask_input.shape[0] // 2:, :], axis=0)
@@ -246,17 +271,24 @@ def find_lane_xy_frommask(mask_input, nwindows = 9, margin = 100, minpix = 50, N
     leftx_current = leftx_base
     rightx_current = rightx_base
 
+    # keep track of the step in the x center of the last windows to improve tracking
+    # (if no pixels are found, the tendency is assumed to continue, to avoid stacking of windows)
+    xstep_lastwin = [0, 0]  #[left, right]
+
     # Create empty lists to receive left and right lane pixel indices
     # inds ==> refer to the nonzero selection!
     left_lane_inds = []
     right_lane_inds = []
+    # ind_regs ==> refer to the image, not nonzero (keep a separate list!)
+    left_lane_inds_fromlabels = []
+    right_lane_inds_fromlabels = []
+
 
     # Create an output image to draw on and visualize the result
     if NO_IMG == False:
         out_img = np.dstack((mask_input, mask_input, mask_input))
     else:
         out_img = None #no image returned
-
 
     # Step through the windows one by one
     for window in range(nwindows):
@@ -277,25 +309,61 @@ def find_lane_xy_frommask(mask_input, nwindows = 9, margin = 100, minpix = 50, N
                           (win_xright_high, win_y_high), (0, 255, 0), 2)
 
         # Identify the nonzero pixels in x and y within the window #
-        # indices of the non-zero selection!
+        # take indices of the non-zero selection!
         good_left_inds = np.where((nonzerox >= win_xleft_low) & (nonzerox <= win_xleft_high) &
                                   (nonzeroy >= win_y_low) & (nonzeroy <= win_y_high))[0]
         good_right_inds = np.where((nonzerox >= win_xright_low) & (nonzerox <= win_xright_high) &
                                    (nonzeroy >= win_y_low) & (nonzeroy <= win_y_high))[0]
 
+        #check the connected regions inside the selection
+        #if points are found, add the whole region to the selection of good indices
+        #kept a separate list as this refers to the image indices (and not nonzero, as the labeling requires the full image
+        # and not only the non zero points of the mask)
+        labels_in_left = np.unique(labels[nonzeroy[good_left_inds], nonzerox[good_left_inds]])
+        labels_in_left = labels_in_left[labels_in_left > 0] #0 = background
+        if labels_in_left != []:
+            for k in labels_in_left:
+                #y indices of the whole region ==> get portion of region within y-window
+                yreg = region_idx_map[k-1][0] #value of label k maps to index k-1!
+                reg_good_idx = np.where((yreg >= win_y_low) & (yreg <= win_y_high))[0]
+                left_lane_inds_fromlabels.append(reg_good_idx)
+        #same for right
+        labels_in_right = np.unique(labels[nonzeroy[good_right_inds], nonzerox[good_right_inds]])
+        labels_in_right = labels_in_right[labels_in_right > 0] #0 = background
+        if window == 8: stop()
+        if labels_in_right != []:
+            for k in labels_in_right:
+                #y indices of the whole region ==> get portion of region within y-window
+                yreg = region_idx_map[k-1][0]  #value of label k maps to index k-1!
+                reg_good_idx = np.where((yreg >= win_y_low) & (yreg <= win_y_high))[0]
+                right_lane_inds_fromlabels.append(reg_good_idx)
+
+
         # Append these indices to the lists (should be full-image indices!)
         left_lane_inds.append(good_left_inds)
         right_lane_inds.append(good_right_inds)
 
+        # Update window x center
+        #left window
+        leftx_previous = leftx_current  # save value
         # If > minpix found pixels, recenter next window #
         # (`right` or `leftx_current`) on their mean position #
         if np.size(good_left_inds) >= minpix:
-            leftx_current = np.int64(np.mean(nonzerox[good_left_inds]))
+            leftx_current = np.int64(np.mean(nonzerox[good_left_inds])) #update
+        else: #not enough pixels in window, assume tendency of previous window continues
+            leftx_current = leftx_previous + xstep_lastwin[0] #update with the same step
+        # store step w.r.t. last value for future iterations
+        xstep_lastwin[0] = leftx_current-leftx_previous
+        #right window
+        rightx_previous = rightx_current  # store last value before update
         if np.size(good_right_inds) >= minpix:
             rightx_current = np.int64(np.mean(nonzerox[good_right_inds]))
+        else:  # not enough pixels in window, assume tendency of previous window continues
+            rightx_current = rightx_previous + xstep_lastwin[1] #update with the same step
+        # store step w.r.t. last value for future iterations
+        xstep_lastwin[1] = rightx_current - rightx_previous
 
-            # Concatenate the arrays of indices (previously was a list of lists of pixels)
-
+    # Concatenate the arrays of indices (previously was a list of lists of pixels)
     left_lane_inds = np.concatenate(left_lane_inds)
     right_lane_inds = np.concatenate(right_lane_inds)
 
@@ -305,7 +373,18 @@ def find_lane_xy_frommask(mask_input, nwindows = 9, margin = 100, minpix = 50, N
     lefty = nonzeroy[left_lane_inds]
     rightx = nonzerox[right_lane_inds]
     righty = nonzeroy[right_lane_inds]
-
+    # append output from labels
+    # inds_fromlabels ==> refer to the whole mask (use np.unravel --> y_idx, x_idx)
+    # convert from list to array with np.concatenate
+    if left_lane_inds_fromlabels != []:
+        yidx, xidx = np.unravel_index(np.concatenate(left_lane_inds_fromlabels), mask_input.shape)
+        leftx = np.concatenate((leftx, xidx))
+        lefty = np.concatenate((lefty, yidx))
+    if right_lane_inds_fromlabels != []:
+        yidx, xidx = np.unravel_index(np.concatenate(right_lane_inds_fromlabels), mask_input.shape)
+        # uniq sorts the inputs, so the indices are taken so the xy coordinates are kept together
+        rightx = np.concatenate((rightx, xidx))
+        righty = np.concatenate((righty, yidx))
 
     # Fit a second order polynomial to each using `np.polyfit`, assuming x = f(y) #
     polycf_left = np.polyfit(lefty, leftx, 2)
@@ -343,6 +422,9 @@ def find_lane_xy_frompoly(mask_input, polycf_left, polycf_right, margin = 100, N
     # Parameters:
     # margin ==> Set the width of the windows +/- margin
     # NO_IMG ==> do not calculate the diagnose output image (used in pipeline)
+
+    #convert to byte
+    mask_input = 255*np.uint8(mask_input/np.max(mask_input))
 
 
     # Locate activated pixels
