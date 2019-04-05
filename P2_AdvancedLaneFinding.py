@@ -129,13 +129,17 @@ image_list = ['straight_lines1.jpg',
 
 input_image = "test_images" + os.sep + image_list[5] #5!  #indices [0-7]
 
-SHOW_STEPS = True
+
+#keywords to control level of output (set True for step by step analysis of image/frame)
+SHOW_COLOR_GRADIENT = False  #show color channel analysis and gradients
+SHOW_WARP = False            #show warping
+SHOW_FIT = True              #show pixel detection and fitting step
 sobel_kernel = 7
 
 # take image name, make a directory for each, for output (used if plotting is on)
 img_basename = os.path.basename(input_image).split('.jpg')[0]
 output_dir = 'output_images' + os.sep + img_basename + os.sep
-if SHOW_STEPS:
+if SHOW_COLOR_GRADIENT:
     os.makedirs(output_dir, exist_ok=True)
 
 # read image and get dimensions
@@ -145,21 +149,24 @@ Ny, Nx, _ = np.shape(img_RGB)
 """I) apply calibration"""
 img_RGB = cv2.undistort(img_RGB, cal_mtx, dist_coef, None, cal_mtx)
 
-"""II) color transformations & gradients """
-"""II.I ==> verify channels"""
-# compute grayscale and get basic gradients of grayscale
-img_grayscl = cv2.cvtColor(img_RGB, cv2.COLOR_RGB2GRAY)
-# get xx and yy gradients, scale amplitude to byte and threshold (using quizz sub-routines)
-grad_x = abs_sobel_thresh(img_grayscl, orient='x', thresh=(20, 100),
-                          sobel_kernel=sobel_kernel, GRAY_INPUT=True)
-grad_y = abs_sobel_thresh(img_grayscl, orient='y', thresh=(20, 100),
-                          sobel_kernel=sobel_kernel, GRAY_INPUT=True)
-grad_xy = mag_thresh(img_grayscl, thresh=(20, 100), GRAY_INPUT=True)
-grad_dir = dir_thresh(img_grayscl, thresh=(0.7, 1.3),
-                      sobel_kernel=19, GRAY_INPUT=True)
 
-if SHOW_STEPS:
-    # printing out some image info and plot
+"""II) color transformations & gradients """
+"""II.I ==> verify channels (optional)"""
+#plot detailed analysis (useful to verify properties and select thresholds)
+if SHOW_COLOR_GRADIENT:
+
+    # compute grayscale image and get basic gradients of it
+    img_grayscl = cv2.cvtColor(img_RGB, cv2.COLOR_RGB2GRAY)
+    # get xx and yy gradients, scale amplitude to byte and threshold (using quiz sub-routines)
+    grad_x = abs_sobel_thresh(img_grayscl, orient='x', thresh=(20, 100),
+                              sobel_kernel=sobel_kernel, GRAY_INPUT=True)
+    grad_y = abs_sobel_thresh(img_grayscl, orient='y', thresh=(20, 100),
+                              sobel_kernel=sobel_kernel, GRAY_INPUT=True)
+    grad_xy = mag_thresh(img_grayscl, thresh=(20, 100), GRAY_INPUT=True)
+    grad_dir = dir_thresh(img_grayscl, thresh=(0.7, 1.3),
+                          sobel_kernel=19, GRAY_INPUT=True)
+
+    # printing image info and plot
     plt.close('all')
     print('Image file: ', img_basename, 'with dimensions:', img_RGB.shape)
 
@@ -169,8 +176,7 @@ if SHOW_STEPS:
              'Input image color/grayscale', fig_num=0)
     plt.savefig(output_dir + img_basename + '_grads.png')
 
-# check RGB channels
-if SHOW_STEPS:
+    # check RGB channels
     # plot RGB channels for threshold analysis
     plotNimg([img_RGB, img_RGB[:, :, 0], img_RGB[:, :, 1], img_RGB[:, :, 2]],
              ['RGB', 'R', 'G', 'B'],
@@ -178,11 +184,10 @@ if SHOW_STEPS:
              'Input image RGB color channels', fig_num=2)
     plt.savefig(output_dir + img_basename + '_RGB.png')
 
-# convert to HLS color space
-img_HLS = cv2.cvtColor(img_RGB, cv2.COLOR_RGB2HLS)
-# output ==> np.shape(img_HLS) = (Ny, Ny, 3 = [H, L, S])
+    # convert to HLS color space
+    img_HLS = cv2.cvtColor(img_RGB, cv2.COLOR_RGB2HLS)
+    # output ==> np.shape(img_HLS) = (Ny, Ny, 3 = [H, L, S])
 
-if SHOW_STEPS:
     # plot HLS channels for threshold analysis
     plotNimg([img_RGB, img_HLS[:, :, 0], img_HLS[:, :, 1], img_HLS[:, :, 2]],
              ['RGB', 'H', 'L', 'S'],
@@ -198,38 +203,40 @@ if SHOW_STEPS:
              ["gray", "gray", "gray", "gray"],
              'HS channels + gradients', fig_num=4)
 
-"""II.II ==> apply thresholds and show masked result"""
-# "positive" thresholds to include relevant marking
-# high S value
-S_thd = (200, 255)
-S_mask = (img_HLS[:, :, 2] > S_thd[0]) & (img_HLS[:, :, 2] <= S_thd[1])
-# high x-gradient
-gradx_mask = abs_sobel_thresh(img_RGB, orient='x', thresh=(20, 100), sobel_kernel=sobel_kernel)
+    """II.II ==> apply thresholds and show masked result"""
+    # "positive" thresholds to include relevant marking
+    # high S value
+    S_thd = (200, 255)
+    S_mask = (img_HLS[:, :, 2] > S_thd[0]) & (img_HLS[:, :, 2] <= S_thd[1])
+    # high x-gradient
+    gradx_mask = abs_sobel_thresh(img_RGB, orient='x', thresh=(20, 100), sobel_kernel=sobel_kernel)
 
-# high S x-gradient
-Sx_mask = abs_sobel_thresh(img_HLS[:, :, 2], orient='x', thresh=(20, 100), sobel_kernel=sobel_kernel, GRAY_INPUT=True)
+    # high S x-gradient
+    Sx_mask = abs_sobel_thresh(img_HLS[:, :, 2], orient='x', thresh=(20, 100), sobel_kernel=sobel_kernel, GRAY_INPUT=True)
+
+    # high R values ==> not used, not robust against "bright" asphalt!
+    R_thd = (200, 255)
+    R_mask = (img_RGB[:, :, 0] > R_thd[0]) & (img_RGB[:, :, 0] <= R_thd[1])
+
+    mask = S_mask | gradx_mask | Sx_mask #| R_mask
+    #mask = S_mask | Sx_mask #| R_mask
 
 
-# high R values ==> not robust against "bright" asphalt!
-R_thd = (200, 255)
-R_mask = (img_RGB[:, :, 0] > R_thd[0]) & (img_RGB[:, :, 0] <= R_thd[1])
+    ##"negative" threshold to reject artifacts?
+    # roadside_mask = (img_HLS[:,:,0] < 40) & (img_HLS[:,:,2] > 30)  & (img_HLS[:,:,2] < 120)
+    # asphalt_mask = (img_HLS[:,:,0] > 100) & (img_HLS[:,:,2] < 30)
+    ##roadside_mask = (img_HLS[:,:,2] <= S_thd[0])
+    # reject_mask = (~roadside_mask) & (~asphalt_mask)
+#plot detailed analysis (useful to verify properties and select thresholds)
 
-mask = S_mask | gradx_mask | Sx_mask #| R_mask
-#mask = S_mask | Sx_mask #| R_mask
-
-
-##"negative" threshold to reject artifacts?
-# roadside_mask = (img_HLS[:,:,0] < 40) & (img_HLS[:,:,2] > 30)  & (img_HLS[:,:,2] < 120)
-# asphalt_mask = (img_HLS[:,:,0] > 100) & (img_HLS[:,:,2] < 30)
-##roadside_mask = (img_HLS[:,:,2] <= S_thd[0])
-# reject_mask = (~roadside_mask) & (~asphalt_mask)
+#define function to process mask
 
 
 """III) Perspective Transformations and Region of Interest (ROI) """
 
 # compute a perspective transform M, given source and destination points:
 
-# based on a Ny x Nx = 720 x 1280 image (straight_lines.jpg)
+# based on a Ny x Nx = 720 x 1280 image (straight_lines1/2.jpg)
 pts_img = np.float32([[190 + 1, 720], [600 + 1, 445],
                       [680 - 2, 445], [1120 - 2, 720]])
 
@@ -268,7 +275,7 @@ x_ROI, y_ROI = closePolygon(pts_ROI)
 
 # TODO: save ROI, M, etc
 
-if SHOW_STEPS:
+if SHOW_COLOR_GRADIENT:
     fig = plt.figure(figsize=(12, 4.5), num=5)
     fig.canvas.set_window_title('Perspective Transform')
     plt.subplot(1, 2, 1)
@@ -289,7 +296,7 @@ mask_img = restrict2ROI(img_RGB, pts_ROI)
 mask_ROI = restrict2ROI(255 * np.uint8(mask), pts_ROI)
 mask_warp = cv2.warpPerspective(mask_ROI, M, (Nx, Ny), flags=cv2.INTER_LINEAR)
 
-if SHOW_STEPS:
+if SHOW_COLOR_GRADIENT:
     # Stack each channel to view their individual contributions in R/G/B
     color_binary = np.dstack((Sx_mask, gradx_mask, S_mask)) * 255
 
