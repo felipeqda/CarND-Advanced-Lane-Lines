@@ -13,7 +13,7 @@ Created on Wed Apr  3 19:13:28 2019
 import numpy as np
 import matplotlib.image as mpimg
 import matplotlib.pyplot as plt
-import cv2
+import cv2, os
 from pdb import set_trace as stop  # useful for debugging
 
 """------------------------------------------------------------"""
@@ -24,13 +24,6 @@ from pdb import set_trace as stop  # useful for debugging
 def weighted_img(img_annotation, initial_img, α=0.8, β=1., γ=0.):
     ###mixes two color images of the same shape, img and initial_img, for annotations
     return cv2.addWeighted(initial_img, α, img_annotation, β, γ)
-
-
-# ---------------------------------------------------------------------
-def gaussian_blur(img, kernel_size):
-    ###Applies a Gaussian Noise kernel###
-    return cv2.GaussianBlur(img, (kernel_size, kernel_size), 0)
-
 
 # ---------------------------------------------------------------------
 def restrict2ROI(img, vertices):
@@ -60,7 +53,6 @@ def restrict2ROI(img, vertices):
 
 
 # ---------------------------------------------------------------------
-
 def plotNimg(imgs, titles, cmap, fig_title, fig_num=None):
     # plot a stack of images with given titles and color maps
     # cmap='gray' for single channel!
@@ -74,16 +66,96 @@ def plotNimg(imgs, titles, cmap, fig_title, fig_num=None):
         plt.imshow(imgs[i_img], cmap=cmap[i_img])
         plt.title(titles[i_img])
 
-    # TODO: save!
-
-
 # ---------------------------------------------------------------------
+def closePolygon(pts_xy):
+    # get a poligon with [N, 2] vertices and returns x and y for plotting
+    # by repeating the last point
+    x = np.concatenate((pts_xy[:, 0], [pts_xy[0, 0]]))
+    y = np.concatenate((pts_xy[:, 1], [pts_xy[0, 1]]))
+    return x, y
+# ---------------------------------------------------------------------
+
+
+
+"""------------------------------------------------------------"""
+""" Camera Calibration                                         """
+"""------------------------------------------------------------"""
+def calibrateCamera(FORCE_REDO=False):
+    """ Load images, get the corner positions in image and generate
+        the calibration matrix and the distortion coefficients.
+        if FORCE_REDO == False; reads previously saved .npz file, if available
+    """
+    # check if already done
+    if os.path.isfile('cal_para.npz') and (FORCE_REDO == False):
+        # restore parameters if already done
+        cal_para = np.load('cal_para.npz')
+        cal_mtx = cal_para['cal_mtx']
+        dist_coef = cal_para['dist_coef']
+        cal_para.close()
+    else:
+        # find image names
+        cal_images = glob.glob("camera_cal/*.jpg")
+        chessb_corners = (9, 6)  # parameter for chessboard = (9,6) corners
+
+        # define known chessboard points in normalized coordinates (3D): grid
+        chessb_knownpoints = np.zeros([chessb_corners[0] * chessb_corners[1], 3],
+                                      dtype=np.float32)
+        chessb_knownpoints[:, 0:2] = np.mgrid[0:chessb_corners[0], 0:chessb_corners[1]].T.reshape(-1, 2)
+
+        # for each image, store known position and image position for calibration
+        img_points_list = []
+        known_points_list = []
+        for img_path in cal_images:
+            # load image
+            image = mpimg.imread(img_path)
+            Ny, Nx, _ = np.shape(image)  # image shape into number of lines, collumns
+            # convert to grayscale
+            grayscl = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+            # get chessboard positions
+            ret, img_corners = cv2.findChessboardCorners(grayscl, chessb_corners, None)
+            # add to list
+            if ret:  # points found
+                known_points_list.append(chessb_knownpoints)
+                img_points_list.append(img_corners)
+        # for each image
+
+        # apply calibration for a sample image (the last one loaded)
+        # Get camera calibration parameters, given object points, image points, and the shape of the grayscale image:
+        ret, cal_mtx, dist_coef, rvecs, tvecs = cv2.calibrateCamera(known_points_list,
+                                                                    img_points_list,
+                                                                    (Nx, Ny), None, None)
+        # save parameters for posterior use
+        np.savez('cal_para.npz', cal_mtx=cal_mtx, dist_coef=dist_coef,
+                 chessb_corners=chessb_corners)
+
+        # Undistort a test image and save results:
+        output_dir = 'output_images' + os.sep + 'calibration' + os.sep
+        os.makedirs(output_dir, exist_ok=True)
+
+        image = mpimg.imread('camera_cal\\calibration1.jpg')
+        cal_image = cv2.undistort(image, cal_mtx, dist_coef, None, cal_mtx)
+
+        # input image
+        fig = plt.figure(num=1)
+        fig.canvas.set_window_title('Input Image')
+        plt.imshow(image)
+        plt.savefig(output_dir + "cal_input.jpg", format='jpg')
+        # calibrated image
+        fig = plt.figure(num=2)
+        fig.canvas.set_window_title('Input Image after Calibration')
+        plt.imshow(cal_image)
+        plt.savefig(output_dir + "cal_output.jpg", format='jpg')
+
+    # return calibration matrix and distortion coefficients to be used with
+    # cv2.undistort(image, cal_mtx, dist_coef, None, cal_mtx)
+    return cal_mtx, dist_coef
+# ------------------------------
 
 """------------------------------------------------------------"""
 """ Masking and Thresholding Image or Gradient                 """
 """------------------------------------------------------------"""
 
-# Threshold application, as developed in quizzes
+# 1) Thresholding tools, as developed in quizzes
 # ---------------------------------------------------------------------
 def abs_sobel_thresh(img, orient='y', thresh=(0, 255),
                      GRAY_INPUT=False, sobel_kernel=3):
@@ -120,10 +192,6 @@ def abs_sobel_thresh(img, orient='y', thresh=(0, 255),
         mask = (sobel_byte > thresh[0]) & (sobel_byte < thresh[1])
     # 6) Return this mask as your binary_output image
     return mask
-
-
-# ---------------------------------------------------------------------
-
 # ---------------------------------------------------------------------
 def mag_thresh(img, sobel_kernel=3, thresh=(0, 255), GRAY_INPUT=False):
     # Define a function that applies Sobel x and y,
@@ -147,10 +215,6 @@ def mag_thresh(img, sobel_kernel=3, thresh=(0, 255), GRAY_INPUT=False):
     mask = (grad_byte > thresh[0]) & (grad_byte < thresh[1])
     # 6) Return this mask as your binary_output image
     return mask
-
-
-# ---------------------------------------------------------------------
-
 # ---------------------------------------------------------------------
 def dir_thresh(img, sobel_kernel=3, thresh=(0, np.pi / 2),
                GRAY_INPUT=False):
@@ -180,50 +244,111 @@ def dir_thresh(img, sobel_kernel=3, thresh=(0, np.pi / 2),
         mask = (grad_dir > thresh[0]) & (grad_dir < thresh[1])
     # 6) Return this mask as your binary_output image
     return mask
-
-
 # ---------------------------------------------------------------------
+# 2) adopted mask processing strategy
+# ---------------------------------------------------------------------
+# define function to process mask using steps tested in the single frame pipeline
+def lanepxmask(img_RGB, sobel_kernel=7):
+    """ Take RGB image, perform necessary color transformation /gradient calculations
+        and output the detected lane pixels mask, alongside an RGB composition of the 3 sub-masks (added)
+        for visualization
+    """
+    # convert to HLS color space
+    img_HLS = cv2.cvtColor(img_RGB, cv2.COLOR_RGB2HLS)
+    # output ==> np.shape(img_HLS) = (Ny, Ny, 3 = [H, L, S])
+
+    # high S value
+    S_thd = (200, 255)
+    S_mask = (img_HLS[:,:,2] > S_thd[0]) & (img_HLS[:,:,2] <= S_thd[1])
+    # high S x-gradient
+    S_gradx_mask = abs_sobel_thresh(img_HLS[:,:,2], orient='x', thresh=(20, 100),
+                                   sobel_kernel=sobel_kernel, GRAY_INPUT=True)
+    # high x-gradient of grayscale image (converted internally)
+    gradx_mask = abs_sobel_thresh(img_RGB, orient='x', thresh=(20, 100), sobel_kernel=sobel_kernel)
+
+    # build main lane pixel mask
+    mask = S_gradx_mask | gradx_mask | S_mask
+    # prepare RGB auxiliary for visualization:
+    # stacked individual contributions in RGB = (S, gradx{Gray},  gradx{S})
+    color_binary_mask = np.dstack((S_mask, gradx_mask, S_gradx_mask)) * 255
+
+    return mask, color_binary_mask
+# ------------------------------
 
 
 """------------------------------------------------------------"""
-""" Miscellaneous                                              """
+""" Warping and Perspective Transformation                     """
 """------------------------------------------------------------"""
+class Warp2TopDown():
+    """ Compute a perspective transform M, given source and destination points
+        Use a class to provide a warping method and remember the points and relevant info as attributes
+    """
+    # -------------------------------
+    def __init__(self):
+        # based on a Ny x Nx = 720 x 1280 image (straight_lines1/2.jpg)
+        self.pts_img = np.float32([[190 + 1, 720], [600 + 1, 445],
+                                   [680 - 2, 445], [1120 - 2, 720]])
 
-def closePolygon(pts_xy):
-    # get a poligon with [N, 2] vertices and returns x and y for plotting
-    # by repeating the last point
-    x = np.concatenate((pts_xy[:, 0], [pts_xy[0, 0]]))
-    y = np.concatenate((pts_xy[:, 1], [pts_xy[0, 1]]))
-    return x, y
+        self.pts_warp = np.float32([[350, 720], [350, 0], [950, 0], [950, 720]])
 
-
+        # direct perspective transform
+        self.M = cv2.getPerspectiveTransform(self.pts_img, self.pts_warp)
+        # inverse perspective transform:
+        self.Minv = cv2.getPerspectiveTransform(self.pts_warp, self.pts_img)
+    # -------------------------------
+    def warp(self, img_in):
+        # Warp an image using the perspective transform, M:
+        Ny, Nx = np.shape(img_in)[0:2]
+        img_warped = cv2.warpPerspective(img_in, self.M, (Nx, Ny), flags=cv2.INTER_LINEAR)
+        return img_warped
+    # -------------------------------
+    def unwarp(self, img_in):
+        # Inverse perspective transform, invM:
+        Ny, Nx = np.shape(img_in)[0:2]
+        img_unwarped = cv2.warpPerspective(img_in, self.Minv, (Nx, Ny), flags=cv2.INTER_LINEAR)
+        return img_unwarped
+    # -------------------------------
+    # define ROI for spatial filtering using inverse transform
+    # cf. equations at
+    # https://docs.opencv.org/2.4/modules/imgproc/doc/geometric_transformations.html#getperspectivetransform
+    # auxiliar 3D coordinates are used with z =1 for source and a normalization factor t for the destination
+    # transposition is done to facilitate matrix product
+    # take the warp region as a reference and expand, to get a rectangle in the top-down view representing relevant
+    # search area
+    def xy_ROI_img(self):
+        xmin, xmax = self.pts_warp[[0, 2], 0]
+        ymin, ymax = self.pts_warp[[2, 3], 1]
+        pts_warpedROI = np.float32( [[xmin - 200, ymax, 1],
+                                     [xmin - 200, ymin, 1],
+                                     [xmax + 200, ymin, 1],
+                                     [xmax + 200, ymax, 1]]).T
+        pts_ROI = np.tensordot(Perspective.Minv.T, pts_warpedROI, axes=([0], [0]))
+        pts_ROI = (pts_ROI[0:2, :] / pts_ROI[2, :]).T
+        x_wROI, y_wROI = closePolygon(pts_warpedROI[0:2, :].T) #in warped domain
+        x_ROI, y_ROI = closePolygon(pts_ROI) #in image domain
+        return x_ROI, y_ROI
+# -------------------------------
 
 """------------------------------------------------------------"""
 """ Mask processing and fitting                                """
 """------------------------------------------------------------"""
 #functions to process the mask by finding lane pixels and fitting
 #(based on quizzes)
-
-
 # ---------------------------------------------------------------------
 class LaneLine:
-    #store the coordinates of the pixels and the polynomial coefficients for each lane
-    #also store where the line reaches the bottom of the image
+    """store the coordinates of the pixels and the polynomial coefficients for each lane
+     also store where the line reaches the bottom of the image """
     def __init__(self, x_coord, y_coord, poly_coef):
         self.x_pix = x_coord
         self.y_pix = y_coord
         self.cf = poly_coef
         self.x_bottom = np.polyval(poly_coef, np.max(y_coord))
 # ---------------------------------------------------------------------
-
-
-
-# ---------------------------------------------------------------------
 def find_lane_xy_frommask(mask_input, nwindows = 9, margin = 100, minpix = 50, NO_IMG = False):
     """ Take the input mask and perform a sliding window search
      Return the coordinates of the located pixels, polynomial coefficients and optionally an image showing the
        windows/detections
-     Parameters:
+     **Parameters/Keywords:
      nwindows ==> Choose the number of sliding windows
      margin ==> Set the width of the windows +/- margin
      minpix ==> Set minimum number of pixels found to recenter window
@@ -257,12 +382,14 @@ def find_lane_xy_frommask(mask_input, nwindows = 9, margin = 100, minpix = 50, N
     histogram = np.sum(mask_input[mask_input.shape[0] // 2:, :], axis=0)
     # Find the peak of the left and right halves of the histogram
     # These will be the starting point for the left and right lines
-    midpoint = np.int(histogram.shape[0] // 2)
-    leftx_base = np.argmax(histogram[:midpoint])
-    rightx_base = np.argmax(histogram[midpoint:]) + midpoint
+    # Consider a margin to avoid locating lanes too close to border
+    Ny, Nx = mask_input.shape[0:2]
+    midpoint = np.int(Nx // 2)
+    leftx_base = np.argmax(histogram[Nx//10:midpoint]) + Nx//10
+    rightx_base = np.argmax(histogram[midpoint:Nx-Nx//10]) + midpoint
 
     # Set height of windows - based on nwindows above and image shape
-    window_height = np.int(mask_input.shape[0] // nwindows)
+    window_height = np.int(Ny // nwindows)
     # Identify the x and y positions of all nonzero pixels in the image
     nonzero = mask_input.nonzero()
     nonzeroy = np.array(nonzero[0])
@@ -271,9 +398,6 @@ def find_lane_xy_frommask(mask_input, nwindows = 9, margin = 100, minpix = 50, N
     leftx_current = leftx_base
     rightx_current = rightx_base
 
-    # keep track of the step in the x center of the last windows to improve tracking
-    # (if no pixels are found, the tendency is assumed to continue, to avoid stacking of windows)
-    xstep_lastwin = [0, 0]  #[left, right]
 
     # Create empty lists to receive left and right lane pixel indices
     # inds ==> refer to the nonzero selection!
@@ -282,7 +406,6 @@ def find_lane_xy_frommask(mask_input, nwindows = 9, margin = 100, minpix = 50, N
     # ind_regs ==> refer to the image, not nonzero (keep a separate list!)
     left_lane_inds_fromlabels = []
     right_lane_inds_fromlabels = []
-
 
     # Create an output image to draw on and visualize the result
     if NO_IMG == False:
@@ -293,8 +416,8 @@ def find_lane_xy_frommask(mask_input, nwindows = 9, margin = 100, minpix = 50, N
     # Step through the windows one by one
     for window in range(nwindows):
         # Identify window boundaries in x and y (and right and left)
-        win_y_low = mask_input.shape[0] - (window + 1) * window_height
-        win_y_high = mask_input.shape[0] - window * window_height
+        win_y_low = Ny - (window + 1) * window_height
+        win_y_high = Ny - window * window_height
         # Find the four boundaries of the window #
         win_xleft_low = leftx_current - margin
         win_xleft_high = leftx_current + margin
@@ -315,53 +438,70 @@ def find_lane_xy_frommask(mask_input, nwindows = 9, margin = 100, minpix = 50, N
         good_right_inds = np.where((nonzerox >= win_xright_low) & (nonzerox <= win_xright_high) &
                                    (nonzeroy >= win_y_low) & (nonzeroy <= win_y_high))[0]
 
+        # Append these indices to the lists (nonzero indices!)
+        left_lane_inds.append(good_left_inds)
+        right_lane_inds.append(good_right_inds)
+
         #check the connected regions inside the selection
         #if points are found, add the whole region to the selection of good indices
         #kept a separate list as this refers to the image indices (and not nonzero, as the labeling requires the full image
         # and not only the non zero points of the mask)
         labels_in_left = np.unique(labels[nonzeroy[good_left_inds], nonzerox[good_left_inds]])
         labels_in_left = labels_in_left[labels_in_left > 0] #0 = background
-        if labels_in_left != []:
+        if np.size(labels_in_left) > 0:
             for k in labels_in_left:
-                #y indices of the whole region ==> get portion of region within y-window
-                yreg = region_idx_map[k-1][0] #value of label k maps to index k-1!
-                reg_good_idx = np.where((yreg >= win_y_low) & (yreg <= win_y_high))[0]
-                left_lane_inds_fromlabels.append(reg_good_idx)
+                # y indices of the whole region ==> get portion of region within y-window
+                yreg_left, xreg_left = region_idx_map[k-1][0],region_idx_map[k-1][1] #value of label k maps to index k-1!
+                reg_good_idx = np.where((yreg_left >= win_y_low) & (yreg_left <= win_y_high))[0]
+                #save 1D index and then convert back to xy later
+                left_lane_inds_fromlabels.append(np.ravel_multi_index((yreg_left[reg_good_idx], xreg_left[reg_good_idx]),
+                                                                       mask_input.shape))
+                out_img[yreg_left[reg_good_idx], xreg_left[reg_good_idx]] = [0, 255, 255]
+        else:
+            xreg_left = []  # empty for concatenation
+
+
         #same for right
         labels_in_right = np.unique(labels[nonzeroy[good_right_inds], nonzerox[good_right_inds]])
         labels_in_right = labels_in_right[labels_in_right > 0] #0 = background
-        if window == 8: stop()
-        if labels_in_right != []:
+        if np.size(labels_in_right) > 0:
             for k in labels_in_right:
                 #y indices of the whole region ==> get portion of region within y-window
-                yreg = region_idx_map[k-1][0]  #value of label k maps to index k-1!
-                reg_good_idx = np.where((yreg >= win_y_low) & (yreg <= win_y_high))[0]
-                right_lane_inds_fromlabels.append(reg_good_idx)
+                yreg_right, xreg_right = region_idx_map[k-1][0], region_idx_map[k-1][1]  #value of label k maps to index k-1!
+                reg_good_idx = np.where((yreg_right >= win_y_low) & (yreg_right <= win_y_high))[0]
+                #save 1D index and then convert back to xy later
+                right_lane_inds_fromlabels.append(np.ravel_multi_index((yreg_right[reg_good_idx], xreg_right[reg_good_idx]),
+                                                                       mask_input.shape))
+                out_img[yreg_right[reg_good_idx], xreg_right[reg_good_idx]] = [255, 255, 0]
+        else:
+            xreg_right = []  # empty for concatenation
 
-
-        # Append these indices to the lists (should be full-image indices!)
-        left_lane_inds.append(good_left_inds)
-        right_lane_inds.append(good_right_inds)
-
-        # Update window x center
+        # Update window's x center
         #left window
-        leftx_previous = leftx_current  # save value
+        x_detected_left = np.concatenate((nonzerox[good_left_inds],xreg_left))
+        leftx_previous = leftx_current  # save current value
         # If > minpix found pixels, recenter next window #
         # (`right` or `leftx_current`) on their mean position #
-        if np.size(good_left_inds) >= minpix:
-            leftx_current = np.int64(np.mean(nonzerox[good_left_inds])) #update
-        else: #not enough pixels in window, assume tendency of previous window continues
-            leftx_current = leftx_previous + xstep_lastwin[0] #update with the same step
-        # store step w.r.t. last value for future iterations
-        xstep_lastwin[0] = leftx_current-leftx_previous
+        if np.size(x_detected_left) >= minpix:
+            leftx_current = np.int64(np.mean(x_detected_left)) #update
+        else: #not enough pixels in window, assume tendency of previous windows continues
+            # make partial fit of order 2
+            polycf_left = np.polyfit(nonzeroy[np.concatenate(left_lane_inds)],
+                                     nonzerox[np.concatenate(left_lane_inds)], 2)
+            leftx_current = np.int(np.round(np.polyval(polycf_left, 0.5*(win_y_low+win_y_high))))
+
         #right window
+        x_detected_right = np.concatenate((nonzerox[good_right_inds],xreg_right))
         rightx_previous = rightx_current  # store last value before update
-        if np.size(good_right_inds) >= minpix:
-            rightx_current = np.int64(np.mean(nonzerox[good_right_inds]))
+        if np.size(x_detected_right) >= minpix:
+            rightx_current = np.int64(np.mean(x_detected_right))
         else:  # not enough pixels in window, assume tendency of previous window continues
-            rightx_current = rightx_previous + xstep_lastwin[1] #update with the same step
+            # make partial fit of order 2
+            polycf_right = np.polyfit(nonzeroy[np.concatenate(right_lane_inds)],
+                                     nonzerox[np.concatenate(right_lane_inds)], 2)
+            rightx_current = np.int(np.round(np.polyval(polycf_right, 0.5*(win_y_low+win_y_high))))
         # store step w.r.t. last value for future iterations
-        xstep_lastwin[1] = rightx_current - rightx_previous
+    #for each window
 
     # Concatenate the arrays of indices (previously was a list of lists of pixels)
     left_lane_inds = np.concatenate(left_lane_inds)
@@ -380,6 +520,7 @@ def find_lane_xy_frommask(mask_input, nwindows = 9, margin = 100, minpix = 50, N
         yidx, xidx = np.unravel_index(np.concatenate(left_lane_inds_fromlabels), mask_input.shape)
         leftx = np.concatenate((leftx, xidx))
         lefty = np.concatenate((lefty, yidx))
+    #same for right lane
     if right_lane_inds_fromlabels != []:
         yidx, xidx = np.unravel_index(np.concatenate(right_lane_inds_fromlabels), mask_input.shape)
         # uniq sorts the inputs, so the indices are taken so the xy coordinates are kept together
@@ -390,6 +531,11 @@ def find_lane_xy_frommask(mask_input, nwindows = 9, margin = 100, minpix = 50, N
     polycf_left = np.polyfit(lefty, leftx, 2)
     polycf_right = np.polyfit(righty, rightx, 2)
 
+    # Lane annotation (to be warped and shown in pipeline)
+    lane_annotation = np.zeros([Ny, Nx, 3], dtype=np.uint8)
+    lane_annotation[lefty, leftx] = [255, 0, 0]
+    lane_annotation[righty, rightx] = [0, 0, 255]
+
     # Optional Visualization Steps
     if NO_IMG == False:
         # Set colors in the left and right lane regions
@@ -397,7 +543,7 @@ def find_lane_xy_frommask(mask_input, nwindows = 9, margin = 100, minpix = 50, N
         out_img[righty, rightx] = [0, 0, 255]
 
         # Generate x and y values for plotting
-        ploty = np.linspace(0, mask_input.shape[0] - 1, mask_input.shape[0])
+        ploty = np.linspace(0, Ny - 1, Ny)
 
         left_fitx = np.polyval(polycf_left, ploty)
         right_fitx = np.polyval(polycf_right, ploty)
@@ -411,21 +557,19 @@ def find_lane_xy_frommask(mask_input, nwindows = 9, margin = 100, minpix = 50, N
     leftlane = LaneLine(leftx, lefty, polycf_left)
     rightlane = LaneLine(rightx, righty, polycf_right)
 
-    return  leftlane, rightlane, out_img
+    return leftlane, rightlane, lane_annotation, out_img
 # ---------------------------------------------------------------------
+def find_lane_xy_frompoly(mask_input, polycf_left, polycf_right, margin = 80, NO_IMG = False):
+    """ Take the input mask and perform a search around the polynomial-matching area
+     Return the coordinates of the located pixels, polynomial coefficients and optionally an image showing the
+       windows/detections
+     **Parameters/Keywords:
+     margin ==> Set the width of the windows +/- margin
+     NO_IMG ==> do not calculate the diagnose output image (used in pipeline) """
 
-# ---------------------------------------------------------------------
-def find_lane_xy_frompoly(mask_input, polycf_left, polycf_right, margin = 100, NO_IMG = False):
-    # Take the input mask and perform a search around the polynomial-matching area
-    # Return the coordinates of the located pixels, polynomial coefficients and optionally an image showing the
-    #   windows/detections
-    # Parameters:
-    # margin ==> Set the width of the windows +/- margin
-    # NO_IMG ==> do not calculate the diagnose output image (used in pipeline)
-
-    #convert to byte
+    #convert bool to byte
     mask_input = 255*np.uint8(mask_input/np.max(mask_input))
-
+    Ny, Nx = np.shape(mask_input)
 
     # Locate activated pixels
     nonzero = mask_input.nonzero()
@@ -448,14 +592,19 @@ def find_lane_xy_frompoly(mask_input, polycf_left, polycf_right, margin = 100, N
     righty = nonzeroy[right_lane_inds]
 
     # Fit new polynomials
-    #  Fit a second order polynomial to each with np.polyfit() : x = f(y)#
+    # Fit a second order polynomial to each with np.polyfit() : x = f(y)#
     polycf_left = np.polyfit(lefty, leftx, 2)
     polycf_right = np.polyfit(righty, rightx, 2)
     # Generate x and y values for plotting
-    ploty = np.linspace(0, mask_input.shape[0] - 1, mask_input.shape[0])
-    # Evaluate both polynomials using ploty, polycf_left and polycf_right #
+    ploty = np.linspace(0, Ny - 1, Ny)
+    # Evaluate both polynomials using ploty, polycf_left and polycf_right
     left_fitx = np.polyval(polycf_left, ploty)
     right_fitx = np.polyval(polycf_right, ploty)
+
+    # Lane annotation (to be warped and shown in pipeline)
+    lane_annotation = np.zeros([Ny, Nx, 3], dtype=np.uint8)
+    lane_annotation[lefty, leftx] = [255, 0, 0]
+    lane_annotation[righty, rightx] = [0, 0, 255]
 
     # Optional Visualization Steps
     if NO_IMG == False:
@@ -463,8 +612,8 @@ def find_lane_xy_frompoly(mask_input, polycf_left, polycf_right, margin = 100, N
         out_img = np.dstack((mask_input, mask_input, mask_input)) * 255
         window_img = np.zeros_like(out_img)
         # Color in left and right line pixels
-        out_img[nonzeroy[left_lane_inds], nonzerox[left_lane_inds]] = [255, 0, 0]
-        out_img[nonzeroy[right_lane_inds], nonzerox[right_lane_inds]] = [0, 0, 255]
+        out_img[lefty, leftx] = [255, 0, 0]
+        out_img[righty, rightx] = [0, 0, 255]
 
         # Generate a polygon to illustrate the search window area
         # And recast the x and y points into usable format for cv2.fillPoly()
@@ -489,9 +638,57 @@ def find_lane_xy_frompoly(mask_input, polycf_left, polycf_right, margin = 100, N
     else:
         out_img = None
 
-    #wrap data into LaneLines objects
+    # wrap data into LaneLines objects
     leftlane = LaneLine(leftx, lefty, polycf_left)
     rightlane = LaneLine(rightx, righty, polycf_right)
 
-    return  leftlane, rightlane, out_img
-#-------------------------------------------------------------------
+    return leftlane, rightlane, lane_annotation, out_img
+# -------------------------------------------------------------------
+def getlane_annotation(mask_shape, polycf_left, polycf_right, img2annotate=[], xmargin = 5, PLOT_LINES=False):
+    """ Give the shape and the polynomial coefficients, return byte mask showing the region inside the two curves
+        (plus an optional x-margin). Also add the annotations to an image if it is provided.
+     **Parameters/Keywords:
+     img2annotate ==> RGB image to annotate, if provided (should match the size of mask_shape!)
+     xmargin ==> Set the width of the +/- margin "
+     PLOT_LINES ==> Add the polynomial lines to output (only relevant if a img2annnotate is present)"""
+
+    #get sizes and declare output
+    Ny, Nx = mask_shape[0:2]
+    out_mask = np.zeros([Ny, Nx], dtype=np.uint8)
+
+    if np.size(img2annotate) != 0:
+        if np.shape(img2annotate)[0:2] != (Ny, Nx): # note: must be tuple !
+            raise Exception ("Error: Image to annotate must match mask size!")
+        #blank RGB to add lane are to
+        img_annotated = np.zeros_like(img2annotate)
+    else:
+        img_annotated = None
+    #check if annotation is possible
+
+    ploty = np.arange(Ny)  #y values to plot
+    # Evaluate both polynomials using ploty, polycf_left and polycf_right
+    left_fitx = np.polyval(polycf_left, ploty)
+    right_fitx = np.polyval(polycf_right, ploty)
+
+    # Generate a polygon to illustrate the lane area
+    # And recast the x and y points into usable format for cv2.fillPoly()
+    left_line_lane = np.array([np.transpose(np.vstack([left_fitx - xmargin, ploty]))])
+    right_line_lane = np.array([np.flipud(np.transpose(np.vstack([right_fitx + xmargin,
+                                                                     ploty])))])
+    lane_pts = np.hstack((left_line_lane, right_line_lane))
+
+    # Draw the lane onto the mask
+    cv2.fillPoly(out_mask, np.int_([lane_pts]), (255))
+
+    # Draw the lane onto the warped blank image
+    if np.size(img2annotate) != 0:
+        cv2.fillPoly(img_annotated, np.int_([lane_pts]), (0, 255, 0)) #green lane
+        img_annotated = cv2.addWeighted(img2annotate, 1, img_annotated, 0.3, 0) #add to image
+        # Plot the polynomial lines onto the image?
+        if PLOT_LINES:
+            plt.plot(left_fitx, ploty, color='yellow', linestyle='--')
+            plt.plot(right_fitx, ploty, color='yellow', linestyle='--')
+    #annotations
+
+    return out_mask, img_annotated
+# -------------------------------------------------------------------
