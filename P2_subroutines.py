@@ -13,7 +13,8 @@ Created on Wed Apr  3 19:13:28 2019
 import numpy as np
 import matplotlib.image as mpimg
 import matplotlib.pyplot as plt
-import cv2, os
+import cv2, os, io
+from PIL import Image
 from pdb import set_trace as stop  # useful for debugging
 
 """------------------------------------------------------------"""
@@ -65,7 +66,10 @@ def plotNimg(imgs, titles, cmap, fig_title, fig_num=None):
         plt.subplot(N_row, 2, i_img + 1)
         plt.imshow(imgs[i_img], cmap=cmap[i_img])
         plt.title(titles[i_img])
-
+# ---------------------------------------------------------------------
+def gaussian_blur(img, kernel_size):
+    """Applies a Gaussian Noise kernel"""
+    return cv2.GaussianBlur(img, (kernel_size, kernel_size), 0)
 # ---------------------------------------------------------------------
 def closePolygon(pts_xy):
     # get a poligon with [N, 2] vertices and returns x and y for plotting
@@ -74,7 +78,16 @@ def closePolygon(pts_xy):
     y = np.concatenate((pts_xy[:, 1], [pts_xy[0, 1]]))
     return x, y
 # ---------------------------------------------------------------------
-
+def get_plot(fignum=[]):
+    #read contents of figure as numpy array and return it
+    #set specified figure as current, if argument is provided
+    if np.size(fignum)!=0:
+        fig = plt.figure(num=fignum)
+    buff = io.BytesIO()
+    plt.savefig(buff, facecolor='w', edgecolor='w', format='png')
+    buff.seek(0)
+    return np.array(Image.open(buff).convert('RGB'))
+# ---------------------------------------------------------------------
 
 
 """------------------------------------------------------------"""
@@ -315,6 +328,7 @@ class Warp2TopDown():
     # transposition is done to facilitate matrix product
     # take the warp region as a reference and expand, to get a rectangle in the top-down view representing relevant
     # search area
+    # -------------------------------
     def xy_ROI_img(self):
         xmin, xmax = self.pts_warp[[0, 2], 0]
         ymin, ymax = self.pts_warp[[2, 3], 1]
@@ -322,11 +336,21 @@ class Warp2TopDown():
                                      [xmin - 200, ymin, 1],
                                      [xmax + 200, ymin, 1],
                                      [xmax + 200, ymax, 1]]).T
-        pts_ROI = np.tensordot(Perspective.Minv.T, pts_warpedROI, axes=([0], [0]))
-        pts_ROI = (pts_ROI[0:2, :] / pts_ROI[2, :]).T
         x_wROI, y_wROI = closePolygon(pts_warpedROI[0:2, :].T) #in warped domain
+        pts_ROI = np.tensordot(self.Minv.T, pts_warpedROI, axes=([0], [0]))
+        pts_ROI = (pts_ROI[0:2, :] / pts_ROI[2, :]).T
         x_ROI, y_ROI = closePolygon(pts_ROI) #in image domain
-        return x_ROI, y_ROI
+        return x_ROI, y_ROI, pts_ROI
+    # -------------------------------
+    def xy_ROI_warped(self):
+        xmin, xmax = self.pts_warp[[0, 2], 0]
+        ymin, ymax = self.pts_warp[[2, 3], 1]
+        pts_warpedROI = np.float32( [[xmin - 200, ymax, 1],
+                                     [xmin - 200, ymin, 1],
+                                     [xmax + 200, ymin, 1],
+                                     [xmax + 200, ymax, 1]]).T
+        x_wROI, y_wROI = closePolygon(pts_warpedROI[0:2, :].T) #in warped domain
+        return x_wROI, y_wROI
 # -------------------------------
 
 """------------------------------------------------------------"""
@@ -338,11 +362,14 @@ class Warp2TopDown():
 class LaneLine:
     """store the coordinates of the pixels and the polynomial coefficients for each lane
      also store where the line reaches the bottom of the image """
-    def __init__(self, x_coord, y_coord, poly_coef):
+    def __init__(self, x_coord, y_coord, poly_coef, C_matrix):
+        self.Npix = np.size(x_coord)
         self.x_pix = x_coord
         self.y_pix = y_coord
         self.cf = poly_coef
         self.x_bottom = np.polyval(poly_coef, np.max(y_coord))
+        #covariance matrix with estimates of variance of coefficinets in main diagonal
+        self.C_matrix = C_matrix
 # ---------------------------------------------------------------------
 def find_lane_xy_frommask(mask_input, nwindows = 9, margin = 100, minpix = 50, NO_IMG = False):
     """ Take the input mask and perform a sliding window search
@@ -456,7 +483,7 @@ def find_lane_xy_frommask(mask_input, nwindows = 9, margin = 100, minpix = 50, N
                 #save 1D index and then convert back to xy later
                 left_lane_inds_fromlabels.append(np.ravel_multi_index((yreg_left[reg_good_idx], xreg_left[reg_good_idx]),
                                                                        mask_input.shape))
-                out_img[yreg_left[reg_good_idx], xreg_left[reg_good_idx]] = [0, 255, 255]
+                #out_img[yreg_left[reg_good_idx], xreg_left[reg_good_idx]] = [0, 255, 255]
         else:
             xreg_left = []  # empty for concatenation
 
@@ -472,7 +499,7 @@ def find_lane_xy_frommask(mask_input, nwindows = 9, margin = 100, minpix = 50, N
                 #save 1D index and then convert back to xy later
                 right_lane_inds_fromlabels.append(np.ravel_multi_index((yreg_right[reg_good_idx], xreg_right[reg_good_idx]),
                                                                        mask_input.shape))
-                out_img[yreg_right[reg_good_idx], xreg_right[reg_good_idx]] = [255, 255, 0]
+                #out_img[yreg_right[reg_good_idx], xreg_right[reg_good_idx]] = [255, 255, 0]
         else:
             xreg_right = []  # empty for concatenation
 
@@ -498,7 +525,7 @@ def find_lane_xy_frommask(mask_input, nwindows = 9, margin = 100, minpix = 50, N
         else:  # not enough pixels in window, assume tendency of previous window continues
             # make partial fit of order 2
             polycf_right = np.polyfit(nonzeroy[np.concatenate(right_lane_inds)],
-                                     nonzerox[np.concatenate(right_lane_inds)], 2)
+                                      nonzerox[np.concatenate(right_lane_inds)], 2)
             rightx_current = np.int(np.round(np.polyval(polycf_right, 0.5*(win_y_low+win_y_high))))
         # store step w.r.t. last value for future iterations
     #for each window
@@ -528,8 +555,8 @@ def find_lane_xy_frommask(mask_input, nwindows = 9, margin = 100, minpix = 50, N
         righty = np.concatenate((righty, yidx))
 
     # Fit a second order polynomial to each using `np.polyfit`, assuming x = f(y) #
-    polycf_left = np.polyfit(lefty, leftx, 2)
-    polycf_right = np.polyfit(righty, rightx, 2)
+    polycf_left, Cmtx_left = np.polyfit(lefty, leftx, 2, cov=True)
+    polycf_right, Cmtx_right = np.polyfit(righty, rightx, 2, cov=True)
 
     # Lane annotation (to be warped and shown in pipeline)
     lane_annotation = np.zeros([Ny, Nx, 3], dtype=np.uint8)
@@ -554,8 +581,8 @@ def find_lane_xy_frommask(mask_input, nwindows = 9, margin = 100, minpix = 50, N
     # Optional Visualization Steps
 
     #wrap data into LaneLines objects
-    leftlane = LaneLine(leftx, lefty, polycf_left)
-    rightlane = LaneLine(rightx, righty, polycf_right)
+    leftlane = LaneLine(leftx, lefty, polycf_left, Cmtx_left)
+    rightlane = LaneLine(rightx, righty, polycf_right, Cmtx_right)
 
     return leftlane, rightlane, lane_annotation, out_img
 # ---------------------------------------------------------------------
@@ -593,8 +620,8 @@ def find_lane_xy_frompoly(mask_input, polycf_left, polycf_right, margin = 80, NO
 
     # Fit new polynomials
     # Fit a second order polynomial to each with np.polyfit() : x = f(y)#
-    polycf_left = np.polyfit(lefty, leftx, 2)
-    polycf_right = np.polyfit(righty, rightx, 2)
+    polycf_left, Cmtx_left = np.polyfit(lefty, leftx, 2, cov=True)
+    polycf_right, Cmtx_right = np.polyfit(righty, rightx, 2, cov=True)
     # Generate x and y values for plotting
     ploty = np.linspace(0, Ny - 1, Ny)
     # Evaluate both polynomials using ploty, polycf_left and polycf_right
@@ -639,8 +666,8 @@ def find_lane_xy_frompoly(mask_input, polycf_left, polycf_right, margin = 80, NO
         out_img = None
 
     # wrap data into LaneLines objects
-    leftlane = LaneLine(leftx, lefty, polycf_left)
-    rightlane = LaneLine(rightx, righty, polycf_right)
+    leftlane = LaneLine(leftx, lefty, polycf_left, Cmtx_left)
+    rightlane = LaneLine(rightx, righty, polycf_right, Cmtx_right)
 
     return leftlane, rightlane, lane_annotation, out_img
 # -------------------------------------------------------------------
@@ -691,4 +718,29 @@ def getlane_annotation(mask_shape, polycf_left, polycf_right, img2annotate=[], x
     #annotations
 
     return out_mask, img_annotated
+# -------------------------------------------------------------------
+def cf_px2m(poly_cf_px, img_shape):
+    """ Convert from pixel polynomial coefficients (order 2) to m
+        x = f(y), with origin at center/bottom of image, positive y upwards!"""
+    Ny, Nx = img_shape[0:2]
+    # Define conversions in x and y from pixels space to meters (approximate values for camera)
+    ym_per_pix = 30  / 720   # meters per pixel in y dimension
+    xm_per_pix = 3.7 / 700  # meters per pixel in x dimension
+
+    # coordinate system of the lane [m] in top-down view:
+    # x = 0 at the center of the image, +x = right
+    # y = 0 at the botton, +y = top
+    # pixel coordinate system: [0,0] at top left, [Nx, Ny] at bottom right
+    # x_m = (x_px - Nx/2)*xm_per_pix
+    # y_m = (Ny - y_px)*ym_per_pix
+    a, b, c = poly_cf_px
+    poly_cf_m = np.array([xm_per_pix/(ym_per_pix**2)*a,
+                          -(2*xm_per_pix/ym_per_pix*Ny*a+xm_per_pix/ym_per_pix*b),
+                          xm_per_pix*(c-Nx/2+Ny*(b+a*Ny))])
+    return poly_cf_m
+# -------------------------------------------------------------------
+#compute radius of curvature of a x=f(y) parabola, usually taken at bottom of image
+def r_curve(polycoef, y):
+    A, B = polycoef[0:2]
+    return((1+(2*A*y+B)**2)**1.5/np.abs(2*A))
 # -------------------------------------------------------------------
