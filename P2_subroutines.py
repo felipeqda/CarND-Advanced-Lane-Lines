@@ -266,6 +266,9 @@ def lanepxmask(img_RGB, sobel_kernel=7):
         and output the detected lane pixels mask, alongside an RGB composition of the 3 sub-masks (added)
         for visualization
     """
+    #morphological kernel
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE,(5,5))
+
     # convert to HLS color space
     img_HLS = cv2.cvtColor(img_RGB, cv2.COLOR_RGB2HLS)
     # output ==> np.shape(img_HLS) = (Ny, Ny, 3 = [H, L, S])
@@ -273,11 +276,20 @@ def lanepxmask(img_RGB, sobel_kernel=7):
     # high S value
     S_thd = (200, 255)
     S_mask = (img_HLS[:,:,2] > S_thd[0]) & (img_HLS[:,:,2] <= S_thd[1])
+    # CLOSE to close gaps
+    S_mask = cv2.morphologyEx(255*np.uint8(S_mask), cv2.MORPH_CLOSE, kernel, iterations = 3) > 0
+    S_mask = cv2.dilate(255 * np.uint8(S_mask), kernel) > 0
     # high S x-gradient
     S_gradx_mask = abs_sobel_thresh(img_HLS[:,:,2], orient='x', thresh=(20, 100),
                                    sobel_kernel=sobel_kernel, GRAY_INPUT=True)
+    # CLOSE to close gaps
+    S_gradx_mask = cv2.morphologyEx(255*np.uint8(S_gradx_mask), cv2.MORPH_CLOSE, kernel, iterations = 3) > 0
+    S_gradx_mask = cv2.dilate(255 * np.uint8(S_gradx_mask), kernel) > 0
+
     # high x-gradient of grayscale image (converted internally)
     gradx_mask = abs_sobel_thresh(img_RGB, orient='x', thresh=(20, 100), sobel_kernel=sobel_kernel)
+    # OPEN for noise reduction
+    gradx_mask = cv2.morphologyEx(255 * np.uint8(gradx_mask), cv2.MORPH_OPEN, kernel, iterations=3) > 0
 
     # build main lane pixel mask
     mask = S_gradx_mask | gradx_mask | S_mask
@@ -578,6 +590,11 @@ def find_lane_xy_frommask(mask_input, nwindows = 9, margin = 100, minpix = 50, N
         # Plots the left and right polynomials on the lane lines
         plt.plot(left_fitx, ploty, color='yellow')
         plt.plot(right_fitx, ploty, color='yellow')
+        #stop()
+        print('Futerwacken')
+        plt.figure(num=51)
+        plt.imshow(labels)
+
     # Optional Visualization Steps
 
     #wrap data into LaneLines objects

@@ -5,7 +5,7 @@ Created on Mon Apr  1 19:42:57 2019
 @author: Felipe
 """
 
-INTERACTIVE_MODE = False #set to False to allow video processing
+INTERACTIVE_MODE = True #set to False to allow video processing
 
 """------------------------------------------------------------"""
 """imports"""
@@ -215,32 +215,32 @@ def single_frame_analysis(input_image,
 
     # color processing of warped image
     box_size = 20
-    box_ystep = 30
-    box_vertices = box_size * np.array([[(-1, -1),  # bottom left
+    box_ystep = 60
+    box_vertices = box_size * np.array([(-1, -1),  # bottom left
                                          (-1, 1), (1, 1),
-                                         (1, -1)]], dtype=np.int32)  # bottom right
+                                         (1, -1)], dtype=np.int32)  # bottom right
 
     x_box, y_box = closePolygon(box_vertices)
     # get average color of boxes and mask out
     image_new = np.copy(imgRGB_warped)
     for i_box in range(3):
-        box = imgRGB_warped[Ny-i_box*box_ystep:Ny-i_box*box_ystep-box_size,
+        box = imgRGB_warped[Ny-i_box*box_ystep-box_size:Ny-i_box*box_ystep+box_size,
                             Nx//2-box_size:Nx//2+box_size,:]
         avg_color = np.mean(box, axis=(0, 1))
-        mask = cv2.inRange(gaussian_blur(imgRGB_warped, 9), np.uint8(avg_color - 50), np.uint8(avg_color + 50))
-        image_new = cv2.bitwise_and(image_new, image_new, mask=255 - mask)
-    imgRGB_warped = image_new #replace
+        mask = cv2.inRange(gaussian_blur(imgRGB_warped, 7), np.uint8(avg_color - 20), np.uint8(avg_color + 20))
+        image_new = cv2.bitwise_and(image_new, image_new, mask=255 - mask) #delete (mask out) similar colors
 
-    mask_warped, cbin_warped = lanepxmask(imgRGB_warped)
+    # calculate mask with color-restricted image
+    mask_warped, cbin_warped = lanepxmask(image_new) #replace for mask calculation
 
 
-    plotNimg([imgRGB_warped, cbin_warped, mask_warped], ['RGB image (warped)', 'Mask components', 'Output mask'],
-                 [None, None, "gray"], 'Warped Image and Detection mask', fig_num=7)
+    plotNimg([imgRGB_warped, image_new, cbin_warped, mask_warped], ['RGB image (warped)', 'RGB image (color mask)', 'Mask components', 'Output mask'],
+                 [None, None, None, "gray"], 'Warped Image and Detection mask', fig_num=7)
     # mark boxes
     plt.figure(num = 7)
     plt.subplot(2,2,1)
     for i_box in range(3):
-        plt.plot(x_box+Nx//2,y_box-i_box*box_ystep,'k')
+        plt.plot(x_box+Nx//2,Ny-i_box*box_ystep+y_box,'c')
     if SAVE_PLOTS: plt.savefig(output_dir +'1'+ img_basename + '_masks-warp.png')
 
 
@@ -293,8 +293,15 @@ def single_frame_analysis(input_image,
     # index: [left/right, a/b] ==> x = f(y) = a*y^2 + b*y + c
     cfs = np.vstack((left.cf, right.cf))
     cf_variance = np.vstack((left.C_matrix[[0,1],[0,1]], right.C_matrix[[0,1],[0,1]]))
+    # normalize to mean, relevant for widely discrepant coefficients
+    cf_variance = cf_variance/np.mean(cf_variance, axis=0)
     #average a/b coefficients with inverse-variance weights
-    w =  np.sum(cf_variance, axis=0)/cf_variance
+    w1 =  np.sum(cf_variance, axis=0)/cf_variance
+    # consider number of points as well
+    w2 = np.reshape(np.array([left.Npix, right.Npix])/(left.Npix+right.Npix), [2,1])
+    # aggregate weights
+    w = w1 * (w2**2)
+    stop()
     cf_avg = np.mean(w*cfs[:,0:2], axis=0)/np.mean(w, axis=0)
     # update coefficients, forcing parallel but keeping x_bottom = f(Ny)
     left.cf[0:2] = cf_avg
@@ -720,13 +727,13 @@ def debug_frame(t):
 #debug_frame(0.0)
 
 # process video
-PROCESS_VIDEO = True
+PROCESS_VIDEO = False
 if PROCESS_VIDEO:
     clip_out = clip_in.fl_image(processing_pipeline)
     clip_out.write_videofile(output_video, audio=False)
 
 
-#single_frame_analysis(clip_in.get_frame(0.0), SHOW_COLOR_GRADIENT = False, SHOW_WARP = False,  SHOW_FIT = True)
+single_frame_analysis(clip_in.get_frame(0.0), SHOW_COLOR_GRADIENT = False, SHOW_WARP = False,  SHOW_FIT = True)
 
 
 # %matplotlib qt5
