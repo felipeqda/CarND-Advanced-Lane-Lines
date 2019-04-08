@@ -228,8 +228,8 @@ def single_frame_analysis(input_image,
     # color processing of warped image
     COLOR_PREPROC = True
     if COLOR_PREPROC:
-        box_size = 20
-        box_ystep = 60
+        box_size = 50
+        box_ystep = 100
         box_vertices = box_size * np.array([(-1, -1),  # bottom left
                                              (-1, 1), (1, 1),
                                              (1, -1)], dtype=np.int32)  # bottom right
@@ -238,11 +238,15 @@ def single_frame_analysis(input_image,
         # get average color of boxes and mask out
         image_new = np.copy(imgRGB_warped)
         for i_box in range(3):
-            box = imgRGB_warped[Ny-i_box*box_ystep-box_size:Ny-i_box*box_ystep+box_size,
+            box = imgRGB_warped[Ny-i_box*box_ystep-2*box_size:Ny-i_box*box_ystep,
                                 Nx//2-box_size:Nx//2+box_size,:]
             avg_color = np.mean(box, axis=(0, 1))
-            mask = cv2.inRange(gaussian_blur(imgRGB_warped, 7), np.uint8(avg_color - 20), np.uint8(avg_color + 20))
+            mask = cv2.inRange(gaussian_blur(imgRGB_warped, 7), np.uint8(avg_color - 25), np.uint8(avg_color + 25))
             image_new = cv2.bitwise_and(image_new, image_new, mask=255 - mask) #delete (mask out) similar colors
+
+        # remove black artifacts
+        mask = cv2.inRange(gaussian_blur(imgRGB_warped, 7), np.uint8([0,0,0]), np.uint8([50,50,50]))
+        image_new = cv2.bitwise_and(image_new, image_new, mask=255 - mask) #delete (mask out) similar colors
 
         # calculate mask with color-restricted image
         mask_warped, cbin_warped = lanepxmask(image_new) #replace for mask calculation
@@ -259,7 +263,7 @@ def single_frame_analysis(input_image,
         plt.figure(num = 7)
         plt.subplot(2,2,1)
         for i_box in range(3):
-            plt.plot(x_box+Nx//2,Ny-i_box*box_ystep+y_box,'c')
+            plt.plot(x_box+Nx//2,Ny-i_box*box_ystep+y_box-box_size,'c')
     if SAVE_PLOTS: plt.savefig(output_dir +'1'+ img_basename + '_masks-warp.png')
 
 
@@ -667,8 +671,8 @@ class ProcessFrame:
         # color pre-processing?
         COLOR_PREPROC = True
         if COLOR_PREPROC:
-            box_size = 20
-            box_ystep = 60
+            box_size = 50
+            box_ystep = 100
             box_vertices = box_size * np.array([(-1, -1),  # bottom left
                                                 (-1, 1), (1, 1),
                                                 (1, -1)], dtype=np.int32)  # bottom right
@@ -677,11 +681,15 @@ class ProcessFrame:
             # get average color of boxes and mask out
             frame_new = np.copy(frame_warped)
             for i_box in range(3):
-                box = frame_warped[Ny - i_box * box_ystep - box_size:Ny - i_box * box_ystep + box_size,
+                box = frame_warped[Ny - i_box * box_ystep - 2*box_size:Ny - i_box * box_ystep,
                       Nx // 2 - box_size:Nx // 2 + box_size, :]
                 avg_color = np.mean(box, axis=(0, 1))
                 mask = cv2.inRange(gaussian_blur(frame_warped, 7), np.uint8(avg_color - 20), np.uint8(avg_color + 20))
                 frame_new = cv2.bitwise_and(frame_new, frame_new, mask=255 - mask)  # delete (mask out) similar colors
+
+            # remove black artifacts
+            mask = cv2.inRange(gaussian_blur(frame_warped, 7), np.uint8([0, 0, 0]), np.uint8([50, 50, 50]))
+            frame_new = cv2.bitwise_and(frame_new, frame_new, mask=255 - mask)  # delete (mask out) similar colors
 
             # calculate mask with color-restricted image
             frame_warped = frame_new
@@ -906,10 +914,10 @@ if PROCESS_VIDEO:
     clip_out.write_videofile(output_video, audio=False)
 
 
-t = 614*1.0/clip_in.fps
+#t = 41.801#614*1.0/clip_in.fps
 
-single_frame_analysis(clip_in.get_frame(t), SHOW_COLOR_GRADIENT = False, SHOW_WARP = False,  SHOW_FIT = True)
-plt.imshow(processing_pipeline(clip_in.get_frame(t)))
+#single_frame_analysis(clip_in.get_frame(t), SHOW_COLOR_GRADIENT = False, SHOW_WARP = False,  SHOW_FIT = True)
+#plt.imshow(processing_pipeline(clip_in.get_frame(t)))
 
 # %matplotlib qt5
 
