@@ -569,6 +569,9 @@ def find_lane_xy_frommask(mask_input, nwindows = 9, margin = 100, minpix = 50, N
     # Fit a second order polynomial to each using `np.polyfit`, assuming x = f(y) #
     polycf_left, Cmtx_left = np.polyfit(lefty, leftx, 2, cov=True)
     polycf_right, Cmtx_right = np.polyfit(righty, rightx, 2, cov=True)
+    stop()
+    #https: // stackoverflow.com / questions / 5477359 / chi - square - numpy - polyfit - numpy
+
 
     # Lane annotation (to be warped and shown in pipeline)
     lane_annotation = np.zeros([Ny, Nx, 3], dtype=np.uint8)
