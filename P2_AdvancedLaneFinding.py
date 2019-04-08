@@ -611,11 +611,7 @@ class ProcessFrame:
             mask_aux = mask_warped
 
         # get first estimate fitting from the mask (no a-priori knowledge)
-        try:
-            left, right, left_right_pxs, _ = find_lane_xy_frommask(mask_aux, NO_IMG=True)
-        except:
-            print('Error @ frame:', self.N_frames)
-            stop()
+        left, right, left_right_pxs, _ = find_lane_xy_frommask(mask_aux, NO_IMG=True)
 
         # deal with special cases
         # if this happens, the lines cross at some point ==> high discrepancy case
@@ -642,11 +638,7 @@ class ProcessFrame:
             # try a new fit from these coefficients and the pre-conditioned mask
             cf_1, cf_2 = left.cf, right.cf
             # update, fitting from these coefficients
-            try:
-                left, right, left_right_pxs, _ = find_lane_xy_frompoly(mask_aux, cf_1, cf_2, NO_IMG=True)
-            except:
-                print('Error @ frame:', self.N_frames )
-                stop()
+            left, right, left_right_pxs, _ = find_lane_xy_frompoly(mask_aux, cf_1, cf_2, NO_IMG=True)
 
         return left, right, left_right_pxs
 
@@ -709,54 +701,73 @@ class ProcessFrame:
             self.leftlane.detected = True
             self.rightlane.detected = True
         else: #try to use a-priori knowledge from previous frames
-            # fit from a-priori knowledge (method M1)
-            cf_left, cf_right = self.leftlane.cfs_median, self.rightlane.cfs_median
-            # returns LaneLine objects
-            left_currentframe, right_currentframe, left_right_pxs = self.detectlanes_frompoly(mask_warped,
-                                                                                            cf_left, cf_right)
+            try:
+                # fit from a-priori knowledge (method M1)
+                cf_left, cf_right = self.leftlane.cfs_median, self.rightlane.cfs_median
+                # returns LaneLine objects
+                left_currentframe, right_currentframe, left_right_pxs = self.detectlanes_frompoly(mask_warped,
+                                                                                                cf_left, cf_right)
 
-            # evaluate uncertainty of coefficients
-            # uncertainty parameters are MSE (index 0) and number of pixels in fit (index 1)
-            BAD_LEFT_M1 =  (left_currentframe.MSE >
-                              (self.leftlane.cfs_uncertainty_avg[0] + 3*self.leftlane.cfs_uncertainty_std[0]) and \
-                           (left_currentframe.Npix <
-                              (self.leftlane.cfs_uncertainty_avg[1] - 5*self.leftlane.cfs_uncertainty_std[1])))
-            BAD_RIGHT_M1 = (right_currentframe.MSE >
-                              (self.rightlane.cfs_uncertainty_avg[0] + 3*self.rightlane.cfs_uncertainty_std[0]) and \
-                           (right_currentframe.Npix <
-                              (self.rightlane.cfs_uncertainty_avg[1] - 5*self.rightlane.cfs_uncertainty_std[1])))
-            # if any of those is bad, try the other method (M2)
-            if BAD_LEFT_M1 or BAD_RIGHT_M1:
-                # detect coefficients based on mask (has to be done for both lanes)
-                y_min_lastframe = np.min([self.leftlane.y_min, self.rightlane.y_min, 3*Ny//4])
-                left_currentframe2, right_currentframe2, _ = self.detectlanes_nopoly(mask_warped,y_min=y_min_lastframe)
-                uncertainty_left2 = [left_currentframe2.MSE, left_currentframe2.Npix]
-                uncertainty_right2 = [right_currentframe2.MSE, right_currentframe2.Npix]
-                BAD_LEFT_M2 = (left_currentframe2.MSE >
-                               (self.leftlane.cfs_uncertainty_avg[0] + 3 * self.leftlane.cfs_uncertainty_std[0]) and \
+                # evaluate uncertainty of coefficients
+                # uncertainty parameters are MSE (index 0) and number of pixels in fit (index 1)
+                BAD_LEFT_M1 =  (left_currentframe.MSE >
+                                  (self.leftlane.cfs_uncertainty_avg[0] + 2*self.leftlane.cfs_uncertainty_std[0]) and \
                                (left_currentframe.Npix <
-                                (self.leftlane.cfs_uncertainty_avg[1] - 5 * self.leftlane.cfs_uncertainty_std[1])))
-                # take more reliable estimate, or median of buffer
-                if BAD_LEFT_M1 and not(BAD_LEFT_M2): #second estimate is better, replace
-                    left_currentframe = left_currentframe2
-                elif BAD_LEFT_M1 and BAD_LEFT_M2: #both are bad, take median
-                    left_currentframe.cfs = self.leftlane.cfs_median
-                    # set uncertainty-related levels to average, these values will influence weights later
-                    left_currentframe.MSE = self.leftlane.cfs_uncertainty_avg[0]
-                    left_currentframe.Npix = self.leftlane.cfs_uncertainty_avg[1]
-                # same for other side
-                BAD_RIGHT_M2 = (right_currentframe2.MSE >
-                                (self.rightlane.cfs_uncertainty_avg[0] + 3 * self.rightlane.cfs_uncertainty_std[0]) and \
-                                (right_currentframe2.Npix <
-                                (self.rightlane.cfs_uncertainty_avg[1] - 5 * self.rightlane.cfs_uncertainty_std[1])))
-                if BAD_RIGHT_M1 and not(BAD_RIGHT_M2): #second estimate is better, replace
-                    right_currentframe = right_currentframe2
-                elif BAD_RIGHT_M1 and BAD_RIGHT_M2:  # both are bad, take median
-                    right_currentframe.cfs = self.rightlane.cfs_median
-                    # set uncertainty-related levels to average, these values will influence weights later
-                    right_currentframe.MSE = self.leftlane.cfs_uncertainty_avg[0]
-                    right_currentframe.Npix = self.leftlane.cfs_uncertainty_avg[1]
-                # take most reliable or median
+                                  (self.leftlane.cfs_uncertainty_avg[1] - 2*self.leftlane.cfs_uncertainty_std[1])))
+                BAD_RIGHT_M1 = (right_currentframe.MSE >
+                                  (self.rightlane.cfs_uncertainty_avg[0] + 2*self.rightlane.cfs_uncertainty_std[0]) and \
+                               (right_currentframe.Npix <
+                                  (self.rightlane.cfs_uncertainty_avg[1] - 2*self.rightlane.cfs_uncertainty_std[1])))
+                # if any of those is bad, try the other method (M2)
+                if BAD_LEFT_M1 or BAD_RIGHT_M1:
+                    print('Bad @', self.N_frames)
+                    # detect coefficients based on mask (has to be done for both lanes)
+                    y_min_lastframe = np.min([self.leftlane.y_min, self.rightlane.y_min, 3*Ny//4])
+                    left_currentframe2, right_currentframe2, _ = self.detectlanes_nopoly(mask_warped,y_min=y_min_lastframe)
+                    uncertainty_left2 = [left_currentframe2.MSE, left_currentframe2.Npix]
+                    uncertainty_right2 = [right_currentframe2.MSE, right_currentframe2.Npix]
+                    BAD_LEFT_M2 = (left_currentframe2.MSE >
+                                   (self.leftlane.cfs_uncertainty_avg[0] + 3 * self.leftlane.cfs_uncertainty_std[0]) and \
+                                   (left_currentframe.Npix <
+                                    (self.leftlane.cfs_uncertainty_avg[1] - 3 * self.leftlane.cfs_uncertainty_std[1])))
+                    # take more reliable estimate, or median of buffer
+                    if BAD_LEFT_M1 and not(BAD_LEFT_M2): #second estimate is better, replace
+                        left_currentframe = left_currentframe2
+                        print('took 2nd left took took')
+                    elif BAD_LEFT_M1 and BAD_LEFT_M2: #both are bad, take median
+                        left_currentframe.cfs = self.leftlane.cfs_median
+                        # set uncertainty-related levels to average, these values will influence weights later
+                        left_currentframe.MSE = self.leftlane.cfs_uncertainty_avg[0]
+                        left_currentframe.Npix = self.leftlane.cfs_uncertainty_avg[1]
+                        print('took avg left took took')
+                    # same for other side
+                    BAD_RIGHT_M2 = (right_currentframe2.MSE >
+                                    (self.rightlane.cfs_uncertainty_avg[0] + 3 * self.rightlane.cfs_uncertainty_std[0]) and \
+                                    (right_currentframe2.Npix <
+                                    (self.rightlane.cfs_uncertainty_avg[1] - 3 * self.rightlane.cfs_uncertainty_std[1])))
+                    if BAD_RIGHT_M1 and not(BAD_RIGHT_M2): #second estimate is better, replace
+                        right_currentframe = right_currentframe2
+                        print('took 2nd right took took')
+                    elif BAD_RIGHT_M1 and BAD_RIGHT_M2:  # both are bad, take median
+                        right_currentframe.cfs = self.rightlane.cfs_median
+                        # set uncertainty-related levels to average, these values will influence weights later
+                        right_currentframe.MSE = self.leftlane.cfs_uncertainty_avg[0]
+                        right_currentframe.Npix = self.leftlane.cfs_uncertainty_avg[1]
+                        print('took avg right took took')
+                    # take most reliable or median
+                self.leftlane.detected = True
+                self.rightlane.detected = True
+            except:
+                #fall-back case
+                right_currentframe.cfs = self.rightlane.cfs_median
+                # set uncertainty-related levels to average, these values will influence weights later
+                right_currentframe.MSE = self.leftlane.cfs_uncertainty_avg[0]
+                right_currentframe.Npix = self.leftlane.cfs_uncertainty_avg[1]
+                # fall-back case
+                print('Error @ :', self.N_frames)
+                print('took fall back!')
+                self.leftlane.detected = False
+                self.rightlane.detected = False
         # buffer is available
 
         # update buffer with information from each lane (info from frame, no smoothing)
@@ -863,7 +874,7 @@ class ProcessFrame:
 
 
 # TODO: test with video
-####
+##### VIDEO
 test_videos = ['project_video.mp4', 'challenge_video.mp4', 'harder_challenge_video.mp4']
 input_video = test_videos[0] # choose video
 output_video = os.path.basename(input_video).split('.mp4')[0]+'_output.mp4'
@@ -889,14 +900,16 @@ def debug_frame(t):
 #debug_frame(0.0)
 
 # process video
-PROCESS_VIDEO = False
+PROCESS_VIDEO = True
 if PROCESS_VIDEO:
     clip_out = clip_in.fl_image(processing_pipeline)
     clip_out.write_videofile(output_video, audio=False)
 
 
-single_frame_analysis(clip_in.get_frame(11.03), SHOW_COLOR_GRADIENT = False, SHOW_WARP = False,  SHOW_FIT = True)
-plt.imshow(processing_pipeline(clip_in.get_frame(11.03)))
+t = 614*1.0/clip_in.fps
+
+single_frame_analysis(clip_in.get_frame(t), SHOW_COLOR_GRADIENT = False, SHOW_WARP = False,  SHOW_FIT = True)
+plt.imshow(processing_pipeline(clip_in.get_frame(t)))
 
 # %matplotlib qt5
 

@@ -300,19 +300,19 @@ def lanepxmask(img_RGB, sobel_kernel=7):
     S_thd = (200, 255)
     S_mask = (img_HLS[:, :, 2] > S_thd[0]) & (img_HLS[:, :, 2] <= S_thd[1])
     # CLOSE to close gaps
-    S_mask = cv2.morphologyEx(255 * np.uint8(S_mask), cv2.MORPH_CLOSE, kernel, iterations=2) > 0
-    S_mask = cv2.dilate(255 * np.uint8(S_mask), kernel) > 0
+    #S_mask = cv2.morphologyEx(255 * np.uint8(S_mask), cv2.MORPH_CLOSE, kernel, iterations=2) > 0
+    #S_mask = cv2.dilate(255 * np.uint8(S_mask), kernel) > 0
     # high S x-gradient
     S_gradx_mask = abs_sobel_thresh(img_HLS[:, :, 2], orient='x', thresh=(20, 100),
                                     sobel_kernel=sobel_kernel, GRAY_INPUT=True)
     # CLOSE to close gaps
-    S_gradx_mask = cv2.morphologyEx(255 * np.uint8(S_gradx_mask), cv2.MORPH_CLOSE, kernel, iterations=2) > 0
-    S_gradx_mask = cv2.dilate(255 * np.uint8(S_gradx_mask), kernel) > 0
+    #S_gradx_mask = cv2.morphologyEx(255 * np.uint8(S_gradx_mask), cv2.MORPH_CLOSE, kernel, iterations=2) > 0
+    #S_gradx_mask = cv2.dilate(255 * np.uint8(S_gradx_mask), kernel) > 0
 
     # high x-gradient of grayscale image (converted internally)
     gradx_mask = abs_sobel_thresh(img_RGB, orient='x', thresh=(20, 100), sobel_kernel=sobel_kernel)
     # OPEN for noise reduction
-    gradx_mask = cv2.morphologyEx(255 * np.uint8(gradx_mask), cv2.MORPH_OPEN, kernel, iterations=2) > 0
+    #gradx_mask = cv2.morphologyEx(255 * np.uint8(gradx_mask), cv2.MORPH_OPEN, kernel, iterations=2) > 0
 
     # build main lane pixel mask
     mask = S_gradx_mask | gradx_mask | S_mask
