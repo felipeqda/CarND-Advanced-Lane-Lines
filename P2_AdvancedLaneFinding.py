@@ -863,13 +863,19 @@ class ProcessFrame:
         plt.text(Nx/2, 40, r"$R_{curve} = $",#+"{:.2f} [m]".format(curvature),
                  horizontalalignment='left',verticalalignment='center',
                  fontsize=14, weight='bold', color='w')
-        plt.text(Nx/2+80, 40, "{:.2f} [m]".format(curvature),
-                 horizontalalignment='left',verticalalignment='center',
-                 fontsize=14, weight='bold', color=self.my_cmp(1.0-inv_Curv))
-        #plots an arrow from xytext to xy (ending near text)
-        plt.annotate("", xy=(x_center_px+sign_Curv*inv_Curv*(200), 3*Ny/4), xytext=(x_center_px, 3*Ny/4),
-                     arrowprops=dict(arrowstyle='simple', facecolor = self.my_cmp(1.0-inv_Curv)),
-                     xycoords = 'data', fontsize=14)
+        if curvature > self.min_rcurve:
+            plt.text(Nx/2+80, 40, "{:.2f} [m]".format(curvature),
+                     horizontalalignment='left',verticalalignment='center',
+                     fontsize=14, weight='bold', color=self.my_cmp(1.0-inv_Curv))
+            #plots an arrow from xytext to xy (ending near text)
+            plt.annotate("", xy=(x_center_px+sign_Curv*inv_Curv*(200), 3*Ny/4), xytext=(x_center_px, 3*Ny/4),
+                         arrowprops=dict(arrowstyle='simple', facecolor = self.my_cmp(1.0-inv_Curv)),
+                         xycoords = 'data', fontsize=14)
+        else:
+            plt.text(Nx/2+80, 40, "?".format(curvature),
+                     horizontalalignment='left',verticalalignment='center',
+                     fontsize=14, weight='bold', color='r')
+
         # print current lane center distance from camera center in m
         plt.text(Nx/2, 85, "$\Delta x_{center}$"+" = {:.2f} [m]".format(deltax_center),
                  horizontalalignment='left',verticalalignment='center',
