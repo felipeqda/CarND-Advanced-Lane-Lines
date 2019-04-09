@@ -39,23 +39,11 @@ from P2_subroutines import calibrateCamera, Warp2TopDown
 from P2_subroutines import abs_sobel_thresh, mag_thresh, dir_thresh, lanepxmask
 # mask processing and fitting
 from P2_subroutines import find_lane_xy_frompoly, find_lane_xy_frommask, getlane_annotation, cf_px2m, r_curve
-
+from P2_subroutines import LaneLine4Video, weight_fit_cfs
 
 """------------------------------------------------------------"""
 """Step 1: Single-frame pipeline """
 """------------------------------------------------------------"""
-def weight_fit_cfs(left, right):
-    # judge fit quality, providing weights and a weighted average of the coefficients
-    cfs = np.vstack((left.cf, right.cf))
-    cf_MSE = np.vstack((left.MSE, right.MSE))
-    # average a/b coefficients with inverse-MSE weights
-    w1 = np.sum(cf_MSE) / cf_MSE
-    # consider number of points as well
-    w2 = np.reshape(np.array([left.Npix, right.Npix]) / (left.Npix + right.Npix), [2, 1])
-    # aggregate weights
-    w = w1 * w2
-    cf_avg = np.mean(w * cfs, axis=0) / np.mean(w, axis=0)
-    return w, cf_avg
 
 #1) Single frame script for testing/development/debugging
 def single_frame_analysis(input_image,
@@ -174,7 +162,6 @@ def single_frame_analysis(input_image,
     #plot detailed analysis (useful to verify properties and select thresholds)
 
 
-
     """III) Perspective Transformations and Region of Interest (ROI) """
     Perspective = Warp2TopDown() #object to perform warping
     # get region of interest in image and warped domain (only relevant for plotting)
@@ -226,37 +213,16 @@ def single_frame_analysis(input_image,
     imgRGB_warped = Perspective.warp(img_RGB)
 
     # color processing of warped image
-    COLOR_PREPROC = True
+    COLOR_PREPROC = False
     if COLOR_PREPROC:
-        box_size = 50
-        box_ystep = 100
-        box_vertices = box_size * np.array([(-1, -1),  # bottom left
-                                             (-1, 1), (1, 1),
-                                             (1, -1)], dtype=np.int32)  # bottom right
-
-        x_box, y_box = closePolygon(box_vertices)
-        # get average color of boxes and mask out
-        image_new = np.copy(imgRGB_warped)
-        for i_box in range(3):
-            box = imgRGB_warped[Ny-i_box*box_ystep-2*box_size:Ny-i_box*box_ystep,
-                                Nx//2-box_size:Nx//2+box_size,:]
-            avg_color = np.mean(box, axis=(0, 1))
-            mask = cv2.inRange(gaussian_blur(imgRGB_warped, 7), np.uint8(avg_color - 25), np.uint8(avg_color + 25))
-            image_new = cv2.bitwise_and(image_new, image_new, mask=255 - mask) #delete (mask out) similar colors
-
-        # remove black artifacts
-        mask = cv2.inRange(gaussian_blur(imgRGB_warped, 7), np.uint8([0,0,0]), np.uint8([50,50,50]))
-        image_new = cv2.bitwise_and(image_new, image_new, mask=255 - mask) #delete (mask out) similar colors
-
-        # calculate mask with color-restricted image
-        mask_warped, cbin_warped = lanepxmask(image_new) #replace for mask calculation
+        image_proc, x_box, y_box, box_size, box_ystep = color_preprocessing(imgRGB_warped, GET_BOX=True)
     else:
-        image_new = imgRGB_warped
+        image_proc = imgRGB_warped
 
-    mask_warped, cbin_warped = lanepxmask(image_new) #mask calculation
+    mask_warped, cbin_warped = lanepxmask(image_proc) #mask calculation
 
 
-    plotNimg([imgRGB_warped, image_new, cbin_warped, mask_warped], ['RGB image (warped)', 'RGB image (color mask)', 'Mask components', 'Output mask'],
+    plotNimg([imgRGB_warped, image_proc, cbin_warped, mask_warped], ['RGB image (warped)', 'RGB image (color mask)', 'Mask components', 'Output mask'],
                  [None, None, None, "gray"], 'Warped Image and Detection mask', fig_num=7)
     if COLOR_PREPROC:
         # mark boxes
@@ -443,134 +409,13 @@ def single_frame_analysis(input_image,
         plt.savefig('output_images' + os.sep + img_basename + '_output.jpg', format='jpg')
 """------------------------------------------------------------"""
 
-# image_list = os.listdir('./test_images')
-image_list = ['straight_lines1.jpg',
-              'straight_lines2.jpg',
-              'test1.jpg',
-              'test2.jpg',  #left curve
-              'test3.jpg',
-              'test4.jpg',
-              'test5.jpg',
-              'test6.jpg']
 
-#### Run for single input
-#input_image = "test_images" + os.sep + image_list[3] #5!  #indices [0-7]
-#single_frame_analysis(input_image)
+"""------------------------------------------------------------"""
+"""Step 2: Video pipeline """
+"""------------------------------------------------------------"""
 
-#### Run for all
-#for input_image in image_list: single_frame_analysis("test_images" + os.sep + input_image)
+#2) Pipeline for video processing (use classes to store cross-frame information)
 
-
-#2) Pipeline for video processing (use class to store cross-frame information)
-
-# ---------------------------------------------------------------------
-class LaneLine4Video():
-    """ Define a helper class to receive the characteristics of each line detection (left/right)
-        This container class gathers information across several frames, unlike LaneLines.
-    """
-    # -------------------------------
-    def __init__(self, N_buffer = 10):
-        # TODO: remove what is not used
-        self.N_buffer = N_buffer
-
-        # xy values
-        # x values of the last N_buffer fits of the line
-        self.recent_xfitted = []
-        #average x values of the fitted line over the last N_buffer iterations
-        self.bestx = None
-        #x values for detected line pixels
-        self.allx = None
-        #y values for detected line pixels
-        self.ally = None
-        self.y_min = 0 #last frame's y_min
-
-        # coefficients
-        # buffer with n last values
-        self.cfs_buffer = np.zeros([N_buffer, 3], dtype='float')
-        self.cfs_buffer[:] = np.nan  #invalid values
-        #polynomial coefficients averaged over the last n iterations
-        self.cfs_avg = np.zeros([3], dtype='float')
-        #polynomial coefficients for the most recent fit
-        self.cfs_current = np.zeros([3], dtype='float')
-        #difference in fit coefficients between last and new fits
-        self.cfs_diffs = np.zeros([3], dtype='float')
-        # all-time statistics (for outlier detection ?)
-        self.N_frames = 0
-        self.cfs_avg_alltime = np.zeros([3], dtype='float')
-        self.cfs_std_alltime = np.zeros([3], dtype='float')
-        # store variance of fit coefficients (output of polyfit) to judge reliability
-        self.cfs_uncertainty_buffer = np.zeros([N_buffer, 2], dtype='float')
-        self.cfs_uncertainty_buffer[:] = np.nan  # invalid values
-        self.cfs_uncertainty_avg = np.zeros([2], dtype='float')
-        self.cfs_uncertainty_std = np.zeros([2], dtype='float')
-
-
-        #curvature and lane center offset
-        #radius of curvature of the line in m
-        self.radius_of_curvature = None
-        self.rcurve_buffer = np.zeros([N_buffer], dtype='float')
-        self.rcurve_buffer[:] = np.nan #mark as invalid
-        #distance in meters of vehicle center from the line
-        self.line_center_offset = None
-        self.lcenter_buffer = np.zeros([N_buffer], dtype='float')
-        self.lcenter_buffer[:] = np.nan #mark as invalid
-
-        # was the line detected in the last iteration?
-        self.detected = False
-
-    # -------------------------------
-    # methods
-    # -------------------------------
-    def update_stats(self, new_cfs, fit_MSE, fit_Npoints):
-        #update fields once a new set of coefficients is found
-        # get new all-time average and standard deviation
-        # https: // en.wikipedia.org / wiki / Algorithms_for_calculating_variance  # Welford's_online_algorithm
-        N_prev = self.N_frames
-        self.N_frames = self.N_frames +1
-        mean_new = self.cfs_avg_alltime + np.float64(1) / (N_prev + 1) * (new_cfs - self.cfs_avg_alltime)
-        self.cfs_avg_alltime =  np.sqrt( ((N_prev) * self.cfs_avg_alltime ** 2 +
-                                          np.sum((new_cfs - self.cfs_avg_alltime) * (new_cfs - self.cfs_avg_alltime ))
-                                          ) / (N_prev + 1) )
-        self.cfs_avg_alltime = mean_new
-
-        # save difference w.r.t. previous state
-        self.cfs_diffs = new_cfs - self.cfs_current
-
-        # overwrite oldest (ring buffer)
-        self.cfs_buffer = np.roll(self.cfs_buffer, 1, axis=0)
-        self.cfs_buffer[0, :] = new_cfs
-        self.cfs_avg = np.nanmean(self.cfs_buffer, axis=0)
-        self.cfs_median = np.nanmedian(self.cfs_buffer, axis=0)
-
-        # keep uncertainty-related parameters
-        self.cfs_uncertainty_buffer = np.roll(self.cfs_uncertainty_buffer, 1, axis=0)
-        new_cf_uncertainty = [fit_MSE, fit_Npoints] #store MSE and number of points contributing to fit
-        self.cfs_uncertainty_buffer[0, :] = new_cf_uncertainty
-        self.cfs_uncertainty_avg = np.nanmean(self.cfs_uncertainty_buffer, axis=0)
-        self.cfs_uncertainty_std = np.nanstd(self.cfs_uncertainty_buffer, axis=0)
-
-        self.cfs_current = new_cfs
-    # -------------------------------
-    def update_xy(self, x_new, y_new, min_y_reliable):
-        # update list of x values
-        if len(self.recent_xfitted) == self.N_buffer: #full buffer
-            oldest = self.recent_xfitted.pop(0) #this removes this entry
-        self.recent_xfitted.append(x_new)
-        # bookkeeping operations
-        self.allx = x_new
-        self.ally = y_new
-        self.y_min = min_y_reliable
-    # -------------------------------
-    def update_R_coords(self, r_curve, line_center_offset):
-        # rationale: keep a buffer to stabilize the values which are displayed
-        # radius of curvature
-        self.rcurve_buffer = np.roll(self.rcurve_buffer,1)
-        self.rcurve_buffer[0] = r_curve
-        self.radius_of_curvature = np.nanmedian(self.rcurve_buffer)
-        # distance in meters of vehicle center from the line
-        self.lcenter_buffer = np.roll(self.lcenter_buffer,1)
-        self.lcenter_buffer[0] = line_center_offset
-        self.line_center_offset = np.nanmedian(self.lcenter_buffer)
 # ---------------------------------------------------------------------
 class ProcessFrame:
     """ Main pipeline as a class to store line info/stats across frames"""
@@ -624,9 +469,6 @@ class ProcessFrame:
             w_compare, _ = weight_fit_cfs(left, right)
             best = [left, right][np.argmax(w_compare)]
             worst = [left, right][1 - np.argmax(w_compare)]
-            # update coefficient to be parallel, keeping x_bottom = f(Ny) of the original fit
-            # worst.cf[0:2] = best.cf[0:2]
-            # worst.cf[2] = worst.x_bottom - np.polyval(np.concatenate((worst.cf[0:2], [0])), Ny)
             worst.cf[2] = best.cf[2]  # since the axis starts from the top, this is the x position of the top
 
             # mask out based on geometry
@@ -637,7 +479,8 @@ class ProcessFrame:
                 # nothing to the right of the bottom of the right lane
                 mask_warped[:, np.int32(right.x_bottom):] = 0
             # remove top of the image (unreliable)
-            mask_warped[0:np.min(best.y_pix), :] = 0
+            mask_warped[0:max((np.min(best.y_pix),150)), :] = 0
+
 
             # try a new fit from these coefficients and the pre-conditioned mask
             cf_1, cf_2 = left.cf, right.cf
@@ -669,30 +512,9 @@ class ProcessFrame:
         frame_warped = self.Perspective.warp(frame)
 
         # color pre-processing?
-        COLOR_PREPROC = True
+        COLOR_PREPROC = False
         if COLOR_PREPROC:
-            box_size = 50
-            box_ystep = 100
-            box_vertices = box_size * np.array([(-1, -1),  # bottom left
-                                                (-1, 1), (1, 1),
-                                                (1, -1)], dtype=np.int32)  # bottom right
-
-            x_box, y_box = closePolygon(box_vertices)
-            # get average color of boxes and mask out
-            frame_new = np.copy(frame_warped)
-            for i_box in range(3):
-                box = frame_warped[Ny - i_box * box_ystep - 2*box_size:Ny - i_box * box_ystep,
-                      Nx // 2 - box_size:Nx // 2 + box_size, :]
-                avg_color = np.mean(box, axis=(0, 1))
-                mask = cv2.inRange(gaussian_blur(frame_warped, 7), np.uint8(avg_color - 20), np.uint8(avg_color + 20))
-                frame_new = cv2.bitwise_and(frame_new, frame_new, mask=255 - mask)  # delete (mask out) similar colors
-
-            # remove black artifacts
-            mask = cv2.inRange(gaussian_blur(frame_warped, 7), np.uint8([0, 0, 0]), np.uint8([50, 50, 50]))
-            frame_new = cv2.bitwise_and(frame_new, frame_new, mask=255 - mask)  # delete (mask out) similar colors
-
-            # calculate mask with color-restricted image
-            frame_warped = frame_new
+            frame_warped = color_preprocessing(frame_warped)
         # replace with color-preprocessed frame
         mask_warped, _ = lanepxmask(frame_warped)
 
@@ -701,11 +523,14 @@ class ProcessFrame:
         #### HERE
         if (self.N_frames < self.N_buffer): #starting up buffer, get from mask
             # fit from the mask (no a-priori knowledge of coefficients)
-            y_min_lastframe = np.min([self.leftlane.y_min, self.rightlane.y_min, 3*Ny//4])
+            if (self.leftlane.y_min != None) and (self.rightlane.y_min != None):
+                y_min_lastframe = np.min([self.leftlane.y_min, self.rightlane.y_min, 3*Ny//4])
+            else:
+                y_min_lastframe = 0
             # returns LaneLine objects, possibly considering problem cases
             left_currentframe,right_currentframe, left_right_pxs = self.detectlanes_nopoly(mask_warped,
                                                                                            y_min=y_min_lastframe)
-            # ?
+            # mark as detected
             self.leftlane.detected = True
             self.rightlane.detected = True
         else: #try to use a-priori knowledge from previous frames
@@ -717,51 +542,55 @@ class ProcessFrame:
                                                                                                 cf_left, cf_right)
 
                 # evaluate uncertainty of coefficients
+                PRINT_STATUS = False  #this is to check the efectivity of the thresholds
+                THD = 2.5 #threshold for std
                 # uncertainty parameters are MSE (index 0) and number of pixels in fit (index 1)
                 BAD_LEFT_M1 =  (left_currentframe.MSE >
-                                  (self.leftlane.cfs_uncertainty_avg[0] + 2*self.leftlane.cfs_uncertainty_std[0]) and \
+                                  (self.leftlane.cfs_uncertainty_avg[0] + THD*self.leftlane.cfs_uncertainty_std[0]) or \
                                (left_currentframe.Npix <
-                                  (self.leftlane.cfs_uncertainty_avg[1] - 2*self.leftlane.cfs_uncertainty_std[1])))
+                                  (self.leftlane.cfs_uncertainty_avg[1] - THD*self.leftlane.cfs_uncertainty_std[1])))
                 BAD_RIGHT_M1 = (right_currentframe.MSE >
-                                  (self.rightlane.cfs_uncertainty_avg[0] + 2*self.rightlane.cfs_uncertainty_std[0]) and \
+                                  (self.rightlane.cfs_uncertainty_avg[0] + THD*self.rightlane.cfs_uncertainty_std[0]) or \
                                (right_currentframe.Npix <
-                                  (self.rightlane.cfs_uncertainty_avg[1] - 2*self.rightlane.cfs_uncertainty_std[1])))
+                                  (self.rightlane.cfs_uncertainty_avg[1] - THD*self.rightlane.cfs_uncertainty_std[1])))
                 # if any of those is bad, try the other method (M2)
                 if BAD_LEFT_M1 or BAD_RIGHT_M1:
-                    print('Bad @', self.N_frames)
+                    if PRINT_STATUS:
+                        print('')
+                        print('Bad @', self.N_frames)
                     # detect coefficients based on mask (has to be done for both lanes)
                     y_min_lastframe = np.min([self.leftlane.y_min, self.rightlane.y_min, 3*Ny//4])
                     left_currentframe2, right_currentframe2, _ = self.detectlanes_nopoly(mask_warped,y_min=y_min_lastframe)
                     uncertainty_left2 = [left_currentframe2.MSE, left_currentframe2.Npix]
                     uncertainty_right2 = [right_currentframe2.MSE, right_currentframe2.Npix]
                     BAD_LEFT_M2 = (left_currentframe2.MSE >
-                                   (self.leftlane.cfs_uncertainty_avg[0] + 3 * self.leftlane.cfs_uncertainty_std[0]) and \
+                                   (self.leftlane.cfs_uncertainty_avg[0] + THD* self.leftlane.cfs_uncertainty_std[0]) or \
                                    (left_currentframe.Npix <
-                                    (self.leftlane.cfs_uncertainty_avg[1] - 3 * self.leftlane.cfs_uncertainty_std[1])))
+                                    (self.leftlane.cfs_uncertainty_avg[1] - THD* self.leftlane.cfs_uncertainty_std[1])))
                     # take more reliable estimate, or median of buffer
                     if BAD_LEFT_M1 and not(BAD_LEFT_M2): #second estimate is better, replace
                         left_currentframe = left_currentframe2
-                        print('took 2nd left took took')
+                        if PRINT_STATUS: print('left: took 2nd method')
                     elif BAD_LEFT_M1 and BAD_LEFT_M2: #both are bad, take median
                         left_currentframe.cfs = self.leftlane.cfs_median
                         # set uncertainty-related levels to average, these values will influence weights later
                         left_currentframe.MSE = self.leftlane.cfs_uncertainty_avg[0]
                         left_currentframe.Npix = self.leftlane.cfs_uncertainty_avg[1]
-                        print('took avg left took took')
+                        if PRINT_STATUS: print('left: took from buffer')
                     # same for other side
                     BAD_RIGHT_M2 = (right_currentframe2.MSE >
-                                    (self.rightlane.cfs_uncertainty_avg[0] + 3 * self.rightlane.cfs_uncertainty_std[0]) and \
+                                    (self.rightlane.cfs_uncertainty_avg[0] + THD* self.rightlane.cfs_uncertainty_std[0]) or \
                                     (right_currentframe2.Npix <
-                                    (self.rightlane.cfs_uncertainty_avg[1] - 3 * self.rightlane.cfs_uncertainty_std[1])))
+                                    (self.rightlane.cfs_uncertainty_avg[1] - THD* self.rightlane.cfs_uncertainty_std[1])))
                     if BAD_RIGHT_M1 and not(BAD_RIGHT_M2): #second estimate is better, replace
                         right_currentframe = right_currentframe2
-                        print('took 2nd right took took')
+                        if PRINT_STATUS: print('right: took 2nd method')
                     elif BAD_RIGHT_M1 and BAD_RIGHT_M2:  # both are bad, take median
                         right_currentframe.cfs = self.rightlane.cfs_median
                         # set uncertainty-related levels to average, these values will influence weights later
                         right_currentframe.MSE = self.leftlane.cfs_uncertainty_avg[0]
                         right_currentframe.Npix = self.leftlane.cfs_uncertainty_avg[1]
-                        print('took avg right took took')
+                        if PRINT_STATUS: print('right: took from buffer')
                     # take most reliable or median
                 self.leftlane.detected = True
                 self.rightlane.detected = True
@@ -772,8 +601,9 @@ class ProcessFrame:
                 right_currentframe.MSE = self.leftlane.cfs_uncertainty_avg[0]
                 right_currentframe.Npix = self.leftlane.cfs_uncertainty_avg[1]
                 # fall-back case
-                print('Error @ :', self.N_frames)
-                print('took fall back!')
+                if PRINT_STATUS:
+                    print('NO DETECTION @ :', self.N_frames)
+                    print('took fall back case from buffer!')
                 self.leftlane.detected = False
                 self.rightlane.detected = False
         # buffer is available
@@ -787,11 +617,14 @@ class ProcessFrame:
         self.rightlane.update_stats(right_currentframe.cf, right_currentframe.MSE,  right_currentframe.Npix)
         self.rightlane.update_xy(right_currentframe.x_pix, right_currentframe.y_pix,right_currentframe.y_min_reliable)
 
+        SMOOTH = True
         # smooth coefficients over buffer for display
-        left_currentframe.cf, right_currentframe.cf = self.leftlane.cfs_median, self.rightlane.cfs_median
-        # use average uncertainties to model effect of smoothing filter
-        left_currentframe.MSE, left_currentframe.Npix = self.leftlane.cfs_uncertainty_avg[0:2]
-        right_currentframe.MSE, right_currentframe.Npix = self.rightlane.cfs_uncertainty_avg[0:2]
+        if SMOOTH:
+            left_currentframe.cf, right_currentframe.cf = self.leftlane.cfs_median, self.rightlane.cfs_median
+            # use average uncertainties to model effect of smoothing filter
+            left_currentframe.MSE, left_currentframe.Npix = self.leftlane.cfs_uncertainty_avg[0:2]
+            right_currentframe.MSE, right_currentframe.Npix = self.rightlane.cfs_uncertainty_avg[0:2]
+        # smooth coefficients over buffer for display
 
 
         """IV) Process fit and represent lane region in image """
@@ -811,12 +644,15 @@ class ProcessFrame:
             left_currentframe.cf[2] = left_currentframe.x_bottom - np.polyval(np.concatenate((cf_avg[0:2], [0])), Ny)
             right_currentframe.cf[0:2] = cf_avg[0:2]
             right_currentframe.cf[2] = right_currentframe.x_bottom - np.polyval(np.concatenate((cf_avg[0:2], [0])), Ny)
-            #y_min_annotation = 0  # show the region until image top, even if extrapolating
-            y_min_annotation = np.min([left_currentframe.y_min_reliable, right_currentframe.y_min_reliable])
+            y_min_annotation = 0  # show the region until image top, even if extrapolating
+            #y_min_annotation = np.min([left_currentframe.y_min_reliable, right_currentframe.y_min_reliable])
         else:
             # else allow two different inclinations but plot only over the reliable region, no extrapolation
             # (extreme curvature, difficult frame)
-            y_min_annotation = np.max([left_currentframe.y_min_reliable, right_currentframe.y_min_reliable])
+            if (left_currentframe.y_min_reliable != None) and (right_currentframe.y_min_reliable != None):
+                y_min_annotation = np.min([left_currentframe.y_min_reliable, right_currentframe.y_min_reliable])
+            else:
+                y_min_annotation = 0
         # not parallel, do not extrapolate
 
 
@@ -884,48 +720,3 @@ class ProcessFrame:
         frame_out[:, :, :] = get_plot(fignum=100)
         return frame_out
 # ---------------------------------------------------------------------
-
-
-
-# TODO: test with video
-##### VIDEO
-test_videos = ['project_video.mp4', 'challenge_video.mp4', 'harder_challenge_video.mp4']
-input_video = test_videos[0] # choose video
-output_video = os.path.basename(input_video).split('.mp4')[0]+'_output.mp4'
-
-
-# applies process_image frame by frame
-processing_pipeline = ProcessFrame(N_buffer = 10)
-print('')
-print('Input video: '+input_video)
-QUICK_TEST = False
-if QUICK_TEST:
-    #take a short sub-clip for the testing
-    clip_in = VideoFileClip(input_video).subclip(0, 5)
-    print('Processing only an excerpt...')
-else:
-    clip_in = VideoFileClip(input_video)
-
-# show a frame based on the time tag
-def debug_frame(t):
-    #fig = plt.figure()
-    #fig.canvas.set_window_title('Debug t ='+str(t))
-    plt.imshow(processing_pipeline(clip_in.get_frame(t)))
-#debug_frame(0.0)
-
-# process video
-PROCESS_VIDEO = True
-if PROCESS_VIDEO:
-    clip_out = clip_in.fl_image(processing_pipeline)
-    clip_out.write_videofile(output_video, audio=False)
-
-
-#t = 41.801#614*1.0/clip_in.fps
-
-#single_frame_analysis(clip_in.get_frame(t), SHOW_COLOR_GRADIENT = False, SHOW_WARP = False,  SHOW_FIT = True)
-#plt.imshow(processing_pipeline(clip_in.get_frame(t)))
-
-# %matplotlib qt5
-
-#single_frame_analysis(clip_in.get_frame(40.081), SHOW_COLOR_GRADIENT = False, SHOW_WARP = False,  SHOW_FIT = True)
-#processing_pipeline(clip_in.get_frame(2.36))

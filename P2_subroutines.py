@@ -17,10 +17,10 @@ import cv2, os, io
 from PIL import Image
 from pdb import set_trace as stop  # useful for debugging
 
+
 """------------------------------------------------------------"""
 """ Image display                                              """
 """------------------------------------------------------------"""
-
 
 # ---------------------------------------------------------------------
 def weighted_img(img_annotation, initial_img, α=0.8, β=1., γ=0.):
@@ -293,7 +293,7 @@ def lanepxmask(img_RGB, sobel_kernel=7):
     MORPH_ENHANCE = True
 
     # morphological kernel
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
 
     # convert to HLS color space
     img_HLS = cv2.cvtColor(img_RGB, cv2.COLOR_RGB2HLS)
@@ -302,6 +302,9 @@ def lanepxmask(img_RGB, sobel_kernel=7):
     # high S value
     S_thd = (200, 255)
     S_mask = (img_HLS[:, :, 2] > S_thd[0]) & (img_HLS[:, :, 2] <= S_thd[1])
+    # reject shadows from S mask
+    S_mask[img_HLS[:,:,1] < 50] = False
+
     # CLOSE to close gaps
     if MORPH_ENHANCE:
         S_mask = cv2.morphologyEx(255 * np.uint8(S_mask), cv2.MORPH_CLOSE, kernel, iterations=2) > 0
@@ -316,12 +319,27 @@ def lanepxmask(img_RGB, sobel_kernel=7):
 
     # high x-gradient of grayscale image (converted internally)
     gradx_mask = abs_sobel_thresh(img_RGB, orient='x', thresh=(20, 100), sobel_kernel=sobel_kernel)
+    # reject dark lines from x-grad mask
+    dark_borders = cv2.blur(img_HLS[:, :, 1], (15,15))<cv2.blur(img_HLS[:, :, 1], (17,17)) #lower L than vicinity
+    dark_borders = cv2.morphologyEx(255*np.uint8(dark_borders), cv2.MORPH_OPEN, kernel, iterations=2)
+    # overall dark region
+    dark_regions = cv2.morphologyEx(255 * np.uint8(img_HLS[:,:,1] < (np.mean(img_HLS[:,:,1]))), cv2.MORPH_OPEN, kernel, iterations=2)
+    # remove noise and dilate to block the border from appearing in gradient
+    dark = cv2.morphologyEx(255 * np.uint8((dark_borders == 255) | (dark_regions == 255)), cv2.MORPH_OPEN, kernel, iterations=3)
+    dark = cv2.dilate(dark,np.ones([sobel_kernel, sobel_kernel]), iterations=2)
+    # sanity check: no white points removed :)
+    stop()
+    white = cv2.inRange(gaussian_blur(img_RGB, 5), np.uint8([180, 180, 180]), np.uint8([255, 255, 255]))
+    dark[white] = 0
+    # remove dark border from gradient
+    gradx_mask[dark == 255] = False
     # OPEN for noise reduction
     if MORPH_ENHANCE:
         gradx_mask = cv2.morphologyEx(255 * np.uint8(gradx_mask), cv2.MORPH_OPEN, kernel, iterations=2) > 0
 
     # build main lane pixel mask
     mask = S_gradx_mask | gradx_mask | S_mask
+
     # prepare RGB auxiliary for visualization:
     # stacked individual contributions in RGB = (S, gradx{Gray},  gradx{S})
     color_binary_mask = np.dstack((S_mask, gradx_mask, S_gradx_mask)) * 255
@@ -335,8 +353,6 @@ def lanepxmask(img_RGB, sobel_kernel=7):
 """------------------------------------------------------------"""
 """ Warping and Perspective Transformation                     """
 """------------------------------------------------------------"""
-
-
 class Warp2TopDown():
     """ Compute a perspective transform M, given source and destination points
         Use a class to provide a warping method and remember the points and relevant info as attributes
@@ -410,6 +426,43 @@ class Warp2TopDown():
 """------------------------------------------------------------"""
 
 
+# ---------------------------------------------------------------------
+def color_preprocessing(img_RGB, GET_BOX=False):
+    """ Apply color-based pre-processing of frames"""
+    box_size = 30
+    box_ystep = 80
+    box_vertices = box_size * np.array([(-1, -1),  # bottom left
+                                        (-1, 1), (1, 1),
+                                        (1, -1)], dtype=np.int32)  # bottom right
+
+    x_box, y_box = closePolygon(box_vertices)
+    # get average color of boxes and mask out
+    image_new = np.copy(img_RGB)
+    Ny, Nx = np.shape(img_RGB)[0:2]
+    for i_box in range(3):
+        box = img_RGB[Ny - i_box * box_ystep - 2 * box_size:Ny - i_box * box_ystep,
+              Nx // 2 - box_size:Nx // 2 + box_size, :]
+        avg_color = np.mean(box, axis=(0, 1))
+        mask = cv2.inRange(gaussian_blur(img_RGB, 7), np.uint8(avg_color - 25), np.uint8(avg_color + 25))
+        image_new = cv2.bitwise_and(image_new, image_new, mask=255 - mask)  # delete (mask out) similar colors
+
+    # remove black artifacts
+    mask = cv2.inRange(gaussian_blur(img_RGB, 7), np.uint8([0, 0, 0]), np.uint8([50, 50, 50]))
+    image_new = cv2.bitwise_and(image_new, image_new, mask=255 - mask)  # delete (mask out) similar colors
+
+    # remove gray artifacts
+    mask = cv2.inRange(gaussian_blur(img_RGB, 7), np.uint8([80, 80, 80]), np.uint8([120, 120, 120]))
+    image_new = cv2.bitwise_and(image_new, image_new, mask=255 - mask)  # delete (mask out) similar colors
+
+
+    if GET_BOX: #return image and box parameters for plotting
+        return image_new, x_box, y_box, box_size, box_ystep
+    else:
+        return image_new
+# ---------------------------------------------------------------------
+
+
+
 # functions to process the mask by finding lane pixels and fitting
 # (based on quizzes)
 # ---------------------------------------------------------------------
@@ -425,9 +478,24 @@ class LaneLine:
         self.x_bottom = np.polyval(poly_coef, np.max(y_coord))
         # MSE of fit (compare "goodness of fit")
         self.MSE = MSE
-        self.y_min_reliable = y_min_reliable
-
-
+        if np.isnan(y_min_reliable):
+            self.y_min_reliable = None #neutral indexing value
+        else:
+            self.y_min_reliable = np.int32(y_min_reliable)
+# ---------------------------------------------------------------------
+def weight_fit_cfs(left, right):
+    """ judge fit quality, providing weights and a weighted average of the coefficients
+        inputs are LaneLine objects """
+    cfs = np.vstack((left.cf, right.cf))
+    cf_MSE = np.vstack((left.MSE, right.MSE))
+    # average a/b coefficients with inverse-MSE weights
+    w1 = np.sum(cf_MSE) / cf_MSE
+    # consider number of points as well
+    w2 = np.reshape(np.array([left.Npix, right.Npix]) / (left.Npix + right.Npix), [2, 1])
+    # aggregate weights
+    w = w1 * w2
+    cf_avg = np.mean(w * cfs, axis=0) / np.mean(w, axis=0)
+    return w, cf_avg
 # ---------------------------------------------------------------------
 def find_lane_xy_frommask(mask_input, nwindows=9, margin=100, minpix=50, NO_IMG=False):
     """ Take the input mask and perform a sliding window search
@@ -453,16 +521,6 @@ def find_lane_xy_frommask(mask_input, nwindows=9, margin=100, minpix=50, NO_IMG=
     # take indices of nonzero (defined in line 267 below) so that the indices refer to the same mask
     region_idx_map = [(labels == j).nonzero() for j in range(1, np.max(labels) + 1)]
 
-    # TODO: use or remove
-    # attribute point score?
-    # points_SCORE = np.zeros([Ny, Nx], dtype=np.uint8)
-    # points_SCORE += mask_in // 255  # score 1 to points in mask
-    # points_SCORE += 10 * (cv2.morphologyEx(mask_in, cv2.MORPH_OPEN, kernel, iterations=1) // 255)
-    # points_SCORE += 20 * (cv2.morphologyEx(mask_in, cv2.MORPH_OPEN, kernel, iterations=2) // 255)
-    # ideas:
-    # dist_transform = cv2.distanceTransform(opening, cv2.DIST_L2, 5)
-    # ret, sure_fg = cv2.threshold(dist_transform, 0.7 * dist_transform.max(), 255, 0)
-
     # Take a "histogram" (x-profile) of the bottom half of the image
     histogram = np.sum(mask_input[mask_input.shape[0] // 2:, :], axis=0)
     # Find the peak of the left and right halves of the histogram
@@ -483,13 +541,10 @@ def find_lane_xy_frommask(mask_input, nwindows=9, margin=100, minpix=50, NO_IMG=
     leftx_current = leftx_base
     rightx_current = rightx_base
 
-    # Create empty lists to receive left and right lane pixel indices
-    # inds ==> refer to the nonzero selection!
-    left_lane_inds = []
-    right_lane_inds = []
-    # ind_regs ==> refer to the image, not nonzero (keep a separate list!)
-    left_lane_inds_fromlabels = []
-    right_lane_inds_fromlabels = []
+    # Create empty lists to receive left and right lane pixel indices/coordinates (first is x)
+    # inds ==> refer to the image, not nonzero!
+    left_lane_inds  = [[], []]
+    right_lane_inds = [[], []]
 
     # Create an output image to draw on and visualize the result
     if NO_IMG == False:
@@ -497,8 +552,17 @@ def find_lane_xy_frommask(mask_input, nwindows=9, margin=100, minpix=50, NO_IMG=
     else:
         out_img = None  # no image returned
 
+    # keep track of the minimumy of the reliable (label-based regions)
+    ymin_good_left = np.nan
+    ymin_good_right = np.nan
+
     # Step through the windows one by one
     for window in range(nwindows):
+
+        # Keep track of in-window detections
+        x_detected_left = []
+        x_detected_right = []
+
         # Identify window boundaries in x and y (and right and left)
         win_y_low = Ny - (window + 1) * window_height
         win_y_high = Ny - window * window_height
@@ -522,9 +586,15 @@ def find_lane_xy_frommask(mask_input, nwindows=9, margin=100, minpix=50, NO_IMG=
         good_right_inds = np.where((nonzerox >= win_xright_low) & (nonzerox <= win_xright_high) &
                                    (nonzeroy >= win_y_low) & (nonzeroy <= win_y_high))[0]
 
-        # Append these indices to the lists (nonzero indices!)
-        left_lane_inds.append(good_left_inds)
-        right_lane_inds.append(good_right_inds)
+        # Append these coordinates to the lists
+        # left lane
+        left_lane_inds[0].append(nonzerox[good_left_inds])
+        x_detected_left.append(nonzerox[good_left_inds])
+        left_lane_inds[1].append(nonzeroy[good_left_inds])
+        # right lane
+        right_lane_inds[0].append(nonzerox[good_right_inds])
+        x_detected_right.append(nonzerox[good_right_inds])
+        right_lane_inds[1].append(nonzeroy[good_right_inds])
 
         # check the connected regions inside the selection
         # if points are found, add the whole region to the selection of good indices
@@ -535,15 +605,15 @@ def find_lane_xy_frommask(mask_input, nwindows=9, margin=100, minpix=50, NO_IMG=
         if np.size(labels_in_left) > 0:
             for k in labels_in_left:
                 # y indices of the whole region ==> get portion of region within y-window
-                yreg_left, xreg_left = region_idx_map[k - 1][0], region_idx_map[k - 1][
-                    1]  # value of label k maps to index k-1!
+                # value of label k maps to index k-1!
+                yreg_left, xreg_left = region_idx_map[k - 1][0], region_idx_map[k - 1][1]
                 reg_good_idx = np.where((yreg_left >= win_y_low) & (yreg_left <= win_y_high))[0]
-                # save 1D index and then convert back to xy later
-                left_lane_inds_fromlabels.append(
-                    np.ravel_multi_index((yreg_left[reg_good_idx], xreg_left[reg_good_idx]),
-                                         mask_input.shape))
-        else:
-            xreg_left = []  # empty for concatenation
+                # store x and y coordinates in the appropriate lists
+                left_lane_inds[0].append(xreg_left[reg_good_idx])
+                left_lane_inds[1].append(yreg_left[reg_good_idx])
+                x_detected_left.append(xreg_left[reg_good_idx])
+                # keep track of minimum value
+                ymin_good_left = np.nanmin(np.concatenate(([ymin_good_left], yreg_left[reg_good_idx])))
 
         # same for right
         labels_in_right = np.unique(labels[nonzeroy[good_right_inds], nonzerox[good_right_inds]])
@@ -551,71 +621,68 @@ def find_lane_xy_frommask(mask_input, nwindows=9, margin=100, minpix=50, NO_IMG=
         if np.size(labels_in_right) > 0:
             for k in labels_in_right:
                 # y indices of the whole region ==> get portion of region within y-window
-                yreg_right, xreg_right = region_idx_map[k - 1][0], region_idx_map[k - 1][
-                    1]  # value of label k maps to index k-1!
+                # value of label k maps to index k-1!
+                yreg_right, xreg_right = region_idx_map[k - 1][0], region_idx_map[k - 1][1]
                 reg_good_idx = np.where((yreg_right >= win_y_low) & (yreg_right <= win_y_high))[0]
-                # save 1D index and then convert back to xy later
-                right_lane_inds_fromlabels.append(
-                    np.ravel_multi_index((yreg_right[reg_good_idx], xreg_right[reg_good_idx]),
-                                         mask_input.shape))
-        else:
-            xreg_right = []  # empty for concatenation
+                # store x and y coordinates in the appropriate lists
+                right_lane_inds[0].append(xreg_right[reg_good_idx])
+                right_lane_inds[1].append(yreg_right[reg_good_idx])
+                x_detected_right.append(xreg_right[reg_good_idx])
+                # keep track of minimum value
+                ymin_good_right = np.nanmin(np.concatenate(([ymin_good_right], yreg_right[reg_good_idx])))
+
 
         # Update window's x center
         # left window
-        x_detected_left = np.concatenate((nonzerox[good_left_inds], xreg_left))
-        leftx_previous = leftx_current  # save current value
+        # perform a fit to predict the window tendency
+
         # If > minpix found pixels, recenter next window #
         # (`right` or `leftx_current`) on their mean position #
-        if np.size(x_detected_left) >= minpix:
-            leftx_current = np.int64(np.mean(x_detected_left))  # update
-        else:  # not enough pixels in window, assume tendency of previous windows continues
-            # make partial fit of order 2
-            polycf_left = np.polyfit(nonzeroy[np.concatenate(left_lane_inds)],
-                                     nonzerox[np.concatenate(left_lane_inds)], 2)
-            leftx_current = np.int(np.round(np.polyval(polycf_left, 0.5 * (win_y_low + win_y_high))))
+        #x_detected_left = np.concatenate(x_detected_left)
+        #if (np.size(x_detected_left) >= minpix):
+        #   leftx_current = np.int64(np.mean(x_detected_left))  # update
+        # make partial fit of order 1 or 2
+        order = 1*(window<3) + 2*(window>=3)
+        polycf_left = np.polyfit(np.concatenate(left_lane_inds[1]),
+                                 np.concatenate(left_lane_inds[0]), order)
+        # predict position at next window
+        leftx_current = np.int(np.round(np.polyval(polycf_left, 0.5 * (win_y_low + win_y_high)-window_height)))
 
         # right window
-        x_detected_right = np.concatenate((nonzerox[good_right_inds], xreg_right))
-        rightx_previous = rightx_current  # store last value before update
-        if np.size(x_detected_right) >= minpix:
-            rightx_current = np.int64(np.mean(x_detected_right))
-        else:  # not enough pixels in window, assume tendency of previous window continues
-            # make partial fit of order 2
-            polycf_right = np.polyfit(nonzeroy[np.concatenate(right_lane_inds)],
-                                      nonzerox[np.concatenate(right_lane_inds)], 2)
-            rightx_current = np.int(np.round(np.polyval(polycf_right, 0.5 * (win_y_low + win_y_high))))
-        # store step w.r.t. last value for future iterations
+        #x_detected_right = np.concatenate(x_detected_right)
+        #print(np.size(x_detected_right))
+        #if np.size(x_detected_right) >= minpix:
+        #    rightx_current = np.int64(np.mean(x_detected_right))
+        # make partial fit of order 1 or 2
+        order = 1*(window < 3) + 2*(window>=3)
+        polycf_right = np.polyfit(np.concatenate(right_lane_inds[1]),
+                                  np.concatenate(right_lane_inds[0]), order)
+        # predict position at next window
+        rightx_current = np.int(np.round(np.polyval(polycf_right, 0.5 * (win_y_low + win_y_high) - window_height)))
+
+        # keep this plot ==> cool to explaine procedure!
+        PLOT_METHOD = False
+        if PLOT_METHOD and (window == 2):
+            plt.figure(num=1)
+            plt.clf()
+            plt.imshow(out_img)
+            y = np.arange(win_y_low-window_height, win_y_high)
+            plt.plot(np.polyval(polycf_left, y), y, 'r--')
+            plt.plot(np.repeat(leftx_current, 2), np.repeat(0.5 * (win_y_low + win_y_high) - window_height,2), 'b+')
+            plt.plot(np.polyval(polycf_right, y), y, 'r--')
+            plt.plot(np.repeat(rightx_current, 2), np.repeat(0.5 * (win_y_low + win_y_high) - window_height,2), 'b+')
+            stop()
+
+
     # for each window
 
     # Concatenate the arrays of indices (previously was a list of lists of pixels)
-    left_lane_inds = np.concatenate(left_lane_inds)
-    right_lane_inds = np.concatenate(right_lane_inds)
-
     # Extract left and right line pixel positions
-    # inds ==> refer to the nonzero selection!
-    leftx = nonzerox[left_lane_inds]
-    lefty = nonzeroy[left_lane_inds]
-    rightx = nonzerox[right_lane_inds]
-    righty = nonzeroy[right_lane_inds]
-    # append output from labels
-    # inds_fromlabels ==> refer to the whole mask (use np.unravel --> y_idx, x_idx)
-    # convert from list to array with np.concatenate
-    if left_lane_inds_fromlabels != []:
-        yidx, xidx = np.unravel_index(np.concatenate(left_lane_inds_fromlabels), mask_input.shape)
-        leftx = np.concatenate((leftx, xidx))
-        lefty = np.concatenate((lefty, yidx))
-        ymin_good_left = np.min(yidx)
-    else:
-        ymin_good_left = None
-    # same for right lane
-    if right_lane_inds_fromlabels != []:
-        yidx, xidx = np.unravel_index(np.concatenate(right_lane_inds_fromlabels), mask_input.shape)
-        rightx = np.concatenate((rightx, xidx))
-        righty = np.concatenate((righty, yidx))
-        ymin_good_right = np.min(yidx)
-    else:
-        ymin_good_right = None
+    # all indices refer to the whole mask!
+    leftx = np.concatenate(left_lane_inds[0])
+    lefty = np.concatenate(left_lane_inds[1])
+    rightx = np.concatenate(right_lane_inds[0])
+    righty = np.concatenate(right_lane_inds[1])
 
     # Fit a second order polynomial to each using `np.polyfit`, assuming x = f(y) #
     # for info on residuals ==> https: // stackoverflow.com / questions / 5477359 / chi - square - numpy - polyfit - numpy
@@ -648,7 +715,6 @@ def find_lane_xy_frommask(mask_input, nwindows=9, margin=100, minpix=50, NO_IMG=
         if plt.get_backend() == 'Agg':
             plt.plot(left_fitx, ploty, color='yellow')
             plt.plot(right_fitx, ploty, color='yellow')
-
     # Optional Visualization Steps
 
     # wrap data into LaneLines objects
@@ -728,7 +794,7 @@ def find_lane_xy_frompoly(mask_input, polycf_left, polycf_right, margin=80, NO_I
         lefty = np.concatenate((lefty, lefty_fromlabels))
         ymin_good_left = np.min(lefty_fromlabels)
     else:
-        ymin_good_left = None
+        ymin_good_left = np.nan
 
     # right side
     rightx_fromlabels, righty_fromlabels = [], []
@@ -748,7 +814,7 @@ def find_lane_xy_frompoly(mask_input, polycf_left, polycf_right, margin=80, NO_I
         righty = np.concatenate((righty, righty_fromlabels))
         ymin_good_right = np.min(righty_fromlabels)
     else:
-        ymin_good_right = None
+        ymin_good_right = np.nan
 
     # Fit new polynomial
     # Fit a second order polynomial to each with np.polyfit() : x = f(y)
@@ -888,3 +954,118 @@ def r_curve(polycoef, y):
     A, B = polycoef[0:2]
     return ((1 + (2 * A * y + B) ** 2) ** 1.5 / np.abs(2 * A))
 # -------------------------------------------------------------------
+
+
+"""------------------------------------------------------------"""
+""" Frame Tracking                                             """
+"""------------------------------------------------------------"""
+
+# ---------------------------------------------------------------------
+class LaneLine4Video():
+    """ Define a helper class to receive the characteristics of each line detection (left/right)
+        This container class gathers information across several frames, unlike LaneLines.
+    """
+    # -------------------------------
+    def __init__(self, N_buffer = 10):
+        # TODO: remove what is not used
+        self.N_buffer = N_buffer
+
+        # xy values
+        # x values of the last N_buffer fits of the line
+        self.recent_xfitted = []
+        #average x values of the fitted line over the last N_buffer iterations
+        self.bestx = None
+        #x values for detected line pixels
+        self.allx = None
+        #y values for detected line pixels
+        self.ally = None
+        self.y_min = 0 #last frame's y_min
+
+        # coefficients
+        # buffer with n last values
+        self.cfs_buffer = np.zeros([N_buffer, 3], dtype='float')
+        self.cfs_buffer[:] = np.nan  #invalid values
+        #polynomial coefficients averaged over the last n iterations
+        self.cfs_avg = np.zeros([3], dtype='float')
+        #polynomial coefficients for the most recent fit
+        self.cfs_current = np.zeros([3], dtype='float')
+        #difference in fit coefficients between last and new fits
+        self.cfs_diffs = np.zeros([3], dtype='float')
+        # all-time statistics (for outlier detection ?)
+        self.N_frames = 0
+        self.cfs_avg_alltime = np.zeros([3], dtype='float')
+        self.cfs_std_alltime = np.zeros([3], dtype='float')
+        # store variance of fit coefficients (output of polyfit) to judge reliability
+        self.cfs_uncertainty_buffer = np.zeros([N_buffer, 2], dtype='float')
+        self.cfs_uncertainty_buffer[:] = np.nan  # invalid values
+        self.cfs_uncertainty_avg = np.zeros([2], dtype='float')
+        self.cfs_uncertainty_std = np.zeros([2], dtype='float')
+
+
+        #curvature and lane center offset
+        #radius of curvature of the line in m
+        self.radius_of_curvature = None
+        self.rcurve_buffer = np.zeros([N_buffer], dtype='float')
+        self.rcurve_buffer[:] = np.nan #mark as invalid
+        #distance in meters of vehicle center from the line
+        self.line_center_offset = None
+        self.lcenter_buffer = np.zeros([N_buffer], dtype='float')
+        self.lcenter_buffer[:] = np.nan #mark as invalid
+
+        # was the line detected in the last iteration?
+        self.detected = False
+
+    # -------------------------------
+    # methods
+    # -------------------------------
+    def update_stats(self, new_cfs, fit_MSE, fit_Npoints):
+        #update fields once a new set of coefficients is found
+        # get new all-time average and standard deviation
+        # https: // en.wikipedia.org / wiki / Algorithms_for_calculating_variance  # Welford's_online_algorithm
+        N_prev = self.N_frames
+        self.N_frames = self.N_frames +1
+        mean_new = self.cfs_avg_alltime + np.float64(1) / (N_prev + 1) * (new_cfs - self.cfs_avg_alltime)
+        self.cfs_avg_alltime =  np.sqrt( ((N_prev) * self.cfs_avg_alltime ** 2 +
+                                          np.sum((new_cfs - self.cfs_avg_alltime) * (new_cfs - self.cfs_avg_alltime ))
+                                          ) / (N_prev + 1) )
+        self.cfs_avg_alltime = mean_new
+
+        # save difference w.r.t. previous state
+        self.cfs_diffs = new_cfs - self.cfs_current
+
+        # overwrite oldest (ring buffer)
+        self.cfs_buffer = np.roll(self.cfs_buffer, 1, axis=0)
+        self.cfs_buffer[0, :] = new_cfs
+        self.cfs_avg = np.nanmean(self.cfs_buffer, axis=0)
+        self.cfs_median = np.nanmedian(self.cfs_buffer, axis=0)
+
+        # keep uncertainty-related parameters
+        self.cfs_uncertainty_buffer = np.roll(self.cfs_uncertainty_buffer, 1, axis=0)
+        new_cf_uncertainty = [fit_MSE, fit_Npoints] #store MSE and number of points contributing to fit
+        self.cfs_uncertainty_buffer[0, :] = new_cf_uncertainty
+        self.cfs_uncertainty_avg = np.nanmean(self.cfs_uncertainty_buffer, axis=0)
+        self.cfs_uncertainty_std = np.nanstd(self.cfs_uncertainty_buffer, axis=0)
+
+        self.cfs_current = new_cfs
+    # -------------------------------
+    def update_xy(self, x_new, y_new, min_y_reliable):
+        # update list of x values
+        if len(self.recent_xfitted) == self.N_buffer: #full buffer
+            oldest = self.recent_xfitted.pop(0) #this removes this entry
+        self.recent_xfitted.append(x_new)
+        # bookkeeping operations
+        self.allx = x_new
+        self.ally = y_new
+        self.y_min = min_y_reliable
+    # -------------------------------
+    def update_R_coords(self, r_curve, line_center_offset):
+        # rationale: keep a buffer to stabilize the values which are displayed
+        # radius of curvature
+        self.rcurve_buffer = np.roll(self.rcurve_buffer,1)
+        self.rcurve_buffer[0] = r_curve
+        self.radius_of_curvature = np.nanmedian(self.rcurve_buffer)
+        # distance in meters of vehicle center from the line
+        self.lcenter_buffer = np.roll(self.lcenter_buffer,1)
+        self.lcenter_buffer[0] = line_center_offset
+        self.line_center_offset = np.nanmedian(self.lcenter_buffer)
+# ---------------------------------------------------------------------
