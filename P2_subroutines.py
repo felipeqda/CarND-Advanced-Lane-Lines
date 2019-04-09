@@ -328,14 +328,18 @@ def lanepxmask(img_RGB, sobel_kernel=7):
     dark = cv2.morphologyEx(255 * np.uint8((dark_borders == 255) | (dark_regions == 255)), cv2.MORPH_OPEN, kernel, iterations=3)
     dark = cv2.dilate(dark,np.ones([sobel_kernel, sobel_kernel]), iterations=2)
     # sanity check: no white points removed :)
-    stop()
     white = cv2.inRange(gaussian_blur(img_RGB, 5), np.uint8([180, 180, 180]), np.uint8([255, 255, 255]))
-    dark[white] = 0
+    dark[white == 255] = 0 # do not remove
     # remove dark border from gradient
     gradx_mask[dark == 255] = False
     # OPEN for noise reduction
     if MORPH_ENHANCE:
         gradx_mask = cv2.morphologyEx(255 * np.uint8(gradx_mask), cv2.MORPH_OPEN, kernel, iterations=2) > 0
+
+    # propagate changes to S mask
+    S_mask[white == 255] = True
+    S_mask[dark_regions == 255] = False
+
 
     # build main lane pixel mask
     mask = S_gradx_mask | gradx_mask | S_mask
@@ -475,7 +479,10 @@ class LaneLine:
         self.x_pix = x_coord
         self.y_pix = y_coord
         self.cf = poly_coef
-        self.x_bottom = np.polyval(poly_coef, np.max(y_coord))
+        if np.size(y_coord) > 0:
+            self.x_bottom = np.polyval(poly_coef, np.max(y_coord))
+        else:
+            self.x_bottom = None
         # MSE of fit (compare "goodness of fit")
         self.MSE = MSE
         if np.isnan(y_min_reliable):

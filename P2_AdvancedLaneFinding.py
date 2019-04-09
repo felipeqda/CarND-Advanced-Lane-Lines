@@ -39,7 +39,7 @@ from P2_subroutines import calibrateCamera, Warp2TopDown
 from P2_subroutines import abs_sobel_thresh, mag_thresh, dir_thresh, lanepxmask
 # mask processing and fitting
 from P2_subroutines import find_lane_xy_frompoly, find_lane_xy_frommask, getlane_annotation, cf_px2m, r_curve
-from P2_subroutines import LaneLine4Video, weight_fit_cfs
+from P2_subroutines import LaneLine, LaneLine4Video, weight_fit_cfs
 
 """------------------------------------------------------------"""
 """Step 1: Single-frame pipeline """
@@ -521,6 +521,7 @@ class ProcessFrame:
 
         """III) Process mask and get polynomial fit for boundaries """
         #### HERE
+        PRINT_STATUS = False  # this is to check the effectivity of the thresholds/error handling
         if (self.N_frames < self.N_buffer): #starting up buffer, get from mask
             # fit from the mask (no a-priori knowledge of coefficients)
             if (self.leftlane.y_min != None) and (self.rightlane.y_min != None):
@@ -528,11 +529,33 @@ class ProcessFrame:
             else:
                 y_min_lastframe = 0
             # returns LaneLine objects, possibly considering problem cases
-            left_currentframe,right_currentframe, left_right_pxs = self.detectlanes_nopoly(mask_warped,
-                                                                                           y_min=y_min_lastframe)
-            # mark as detected
-            self.leftlane.detected = True
-            self.rightlane.detected = True
+            try:
+                left_currentframe,right_currentframe, left_right_pxs = self.detectlanes_nopoly(mask_warped,
+                                                                                               y_min=y_min_lastframe)
+                # mark as detected
+                self.leftlane.detected = True
+                self.rightlane.detected = True
+            except:
+                # seldom case of an error in the filling up of a buffer, resort to fall-back solution of median
+                # fall-back case
+                # left lane
+                left_currentframe = LaneLine([], [], self.leftlane.cfs_median,
+                                             self.leftlane.cfs_uncertainty_avg[0],np.nan)
+                # number of pixels and x bottom have to be defined manually
+                left_currentframe.Npix = self.leftlane.cfs_uncertainty_avg[1]
+                left_currentframe.x_bottom = np.polyval(left_currentframe.cf, Ny)
+                # right lane
+                #LaneLine(leftx, lefty, polycf_left, MSE_left, ymin_good_left)
+                right_currentframe = LaneLine([], [], self.rightlane.cfs_median,
+                                             self.rightlane.cfs_uncertainty_avg[0], np.nan)
+                # number of pixels and x bottom have to be defined manually
+                right_currentframe.Npix = self.rightlane.cfs_uncertainty_avg[1]
+                right_currentframe.x_bottom = np.polyval(right_currentframe.cf, Ny)
+                if PRINT_STATUS:
+                    print('NO DETECTION @ :', self.N_frames)
+                    print('took fall back case from buffer!')
+                self.leftlane.detected = False
+                self.rightlane.detected = False
         else: #try to use a-priori knowledge from previous frames
             try:
                 # fit from a-priori knowledge (method M1)
@@ -542,7 +565,6 @@ class ProcessFrame:
                                                                                                 cf_left, cf_right)
 
                 # evaluate uncertainty of coefficients
-                PRINT_STATUS = False  #this is to check the efectivity of the thresholds
                 THD = 2.5 #threshold for std
                 # uncertainty parameters are MSE (index 0) and number of pixels in fit (index 1)
                 BAD_LEFT_M1 =  (left_currentframe.MSE >
@@ -595,11 +617,17 @@ class ProcessFrame:
                 self.leftlane.detected = True
                 self.rightlane.detected = True
             except:
-                #fall-back case
+                # fall-back case
+                # left lane
+                left_currentframe.cfs = self.leftlane.cfs_median
+                # set uncertainty-related levels to average, these values will influence weights later
+                left_currentframe.MSE = self.leftlane.cfs_uncertainty_avg[0]
+                left_currentframe.Npix = self.leftlane.cfs_uncertainty_avg[1]
+                # right lane
                 right_currentframe.cfs = self.rightlane.cfs_median
                 # set uncertainty-related levels to average, these values will influence weights later
-                right_currentframe.MSE = self.leftlane.cfs_uncertainty_avg[0]
-                right_currentframe.Npix = self.leftlane.cfs_uncertainty_avg[1]
+                right_currentframe.MSE = self.rightlane.cfs_uncertainty_avg[0]
+                right_currentframe.Npix = self.rightlane.cfs_uncertainty_avg[1]
                 # fall-back case
                 if PRINT_STATUS:
                     print('NO DETECTION @ :', self.N_frames)
@@ -664,10 +692,13 @@ class ProcessFrame:
                                                  xmargin = 0, ymin=y_min_annotation, PLOT_LINES=False)
         # post-processing (necessary not to lose ROI)
         lane_mask = self.Perspective.unwarp(lane_mask_warped)
-        left_right_annotation = self.Perspective.unwarp(left_right_pxs)
+        if (self.leftlane.detected and self.rightlane.detected):
+            left_right_annotation = self.Perspective.unwarp(left_right_pxs)
+        else:
+            left_right_annotation = np.zeros_like(frame) #nothing to annotate with
         lane_annotation = np.dstack((left_right_annotation[:,:,0],
                                      lane_mask,
-                                     left_right_annotation[:,:,2])) #auxiliar to mark lane in green
+                                     left_right_annotation[:,:,2])) #auxiliar to mark lane in G and lane pixels in R/B
 
         frame_out = cv2.addWeighted(frame, 1, lane_annotation, 0.3, 0)  # add to RGB frame
 
