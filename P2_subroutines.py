@@ -13,7 +13,7 @@ Created on Wed Apr  3 19:13:28 2019
 import numpy as np
 import matplotlib.image as mpimg
 import matplotlib.pyplot as plt
-import cv2, os, io
+import cv2, os, io, glob
 from PIL import Image
 from pdb import set_trace as stop  # useful for debugging
 
@@ -153,32 +153,40 @@ def calibrateCamera(FORCE_REDO=False):
         np.savez('cal_para.npz', cal_mtx=cal_mtx, dist_coef=dist_coef,
                  chessb_corners=chessb_corners)
 
-        # Undistort a test image and save results:
+        # Undistort a test images and save results:
         output_dir = 'output_images' + os.sep + 'calibration' + os.sep
         os.makedirs(output_dir, exist_ok=True)
 
-        image = mpimg.imread('camera_cal\\calibration1.jpg')
-        cal_image = cv2.undistort(image, cal_mtx, dist_coef, None, cal_mtx)
+        for img_path in cal_images:
 
-        # input image
-        fig = plt.figure(num=1)
-        plt.clf()
-        fig.canvas.set_window_title('Input Image')
-        plt.imshow(image)
-        plt.savefig(output_dir + "cal_input.jpg", format='jpg')
-        # calibrated image
-        fig = plt.figure(num=2)
-        plt.clf()
-        fig.canvas.set_window_title('Input Image after Calibration')
-        plt.imshow(cal_image)
-        plt.savefig(output_dir + "cal_output.jpg", format='jpg')
+            image = mpimg.imread(img_path)
+            cal_image = cv2.undistort(image, cal_mtx, dist_coef, None, cal_mtx)
+            img_basename = os.path.basename(img_path).split('.jpg')[0]
+
+            # input image
+            fig = plt.figure(num=1)
+            plt.clf()
+            fig.canvas.set_window_title('Input Image')
+            plt.imshow(image)
+            plt.savefig(output_dir + img_basename+".jpg", format='jpg')
+            # calibrated image
+            fig = plt.figure(num=2)
+            plt.clf()
+            fig.canvas.set_window_title('Input Image after Calibration')
+            plt.imshow(cal_image)
+            plt.savefig(output_dir + img_basename+"_output.jpg", format='jpg')
+
+    plt.close('all')
 
     # return calibration matrix and distortion coefficients to be used with
     # cv2.undistort(image, cal_mtx, dist_coef, None, cal_mtx)
     return cal_mtx, dist_coef
-
-
 # ------------------------------
+def undistort(image, cal_mtx, dist_coef):
+    # apply the above coefficients/matrix to a given image
+    return cv2.undistort(image, cal_mtx, dist_coef, None, cal_mtx)
+# ------------------------------
+
 
 """------------------------------------------------------------"""
 """ Masking and Thresholding Image or Gradient                 """
@@ -429,7 +437,6 @@ class Warp2TopDown():
 """ Mask processing and fitting                                """
 """------------------------------------------------------------"""
 
-
 # ---------------------------------------------------------------------
 def color_preprocessing(img_RGB, GET_BOX=False):
     """ Apply color-based pre-processing of frames"""
@@ -566,10 +573,6 @@ def find_lane_xy_frommask(mask_input, nwindows=9, margin=100, minpix=50, NO_IMG=
     # Step through the windows one by one
     for window in range(nwindows):
 
-        # Keep track of in-window detections
-        x_detected_left = []
-        x_detected_right = []
-
         # Identify window boundaries in x and y (and right and left)
         win_y_low = Ny - (window + 1) * window_height
         win_y_high = Ny - window * window_height
@@ -596,11 +599,9 @@ def find_lane_xy_frommask(mask_input, nwindows=9, margin=100, minpix=50, NO_IMG=
         # Append these coordinates to the lists
         # left lane
         left_lane_inds[0].append(nonzerox[good_left_inds])
-        x_detected_left.append(nonzerox[good_left_inds])
         left_lane_inds[1].append(nonzeroy[good_left_inds])
         # right lane
         right_lane_inds[0].append(nonzerox[good_right_inds])
-        x_detected_right.append(nonzerox[good_right_inds])
         right_lane_inds[1].append(nonzeroy[good_right_inds])
 
         # check the connected regions inside the selection
@@ -618,7 +619,6 @@ def find_lane_xy_frommask(mask_input, nwindows=9, margin=100, minpix=50, NO_IMG=
                 # store x and y coordinates in the appropriate lists
                 left_lane_inds[0].append(xreg_left[reg_good_idx])
                 left_lane_inds[1].append(yreg_left[reg_good_idx])
-                x_detected_left.append(xreg_left[reg_good_idx])
                 # keep track of minimum value
                 ymin_good_left = np.nanmin(np.concatenate(([ymin_good_left], yreg_left[reg_good_idx])))
 
@@ -634,42 +634,37 @@ def find_lane_xy_frommask(mask_input, nwindows=9, margin=100, minpix=50, NO_IMG=
                 # store x and y coordinates in the appropriate lists
                 right_lane_inds[0].append(xreg_right[reg_good_idx])
                 right_lane_inds[1].append(yreg_right[reg_good_idx])
-                x_detected_right.append(xreg_right[reg_good_idx])
                 # keep track of minimum value
                 ymin_good_right = np.nanmin(np.concatenate(([ymin_good_right], yreg_right[reg_good_idx])))
 
 
         # Update window's x center
         # left window
-        # perform a fit to predict the window tendency
-
-        # If > minpix found pixels, recenter next window #
-        # (`right` or `leftx_current`) on their mean position #
-        #x_detected_left = np.concatenate(x_detected_left)
-        #if (np.size(x_detected_left) >= minpix):
-        #   leftx_current = np.int64(np.mean(x_detected_left))  # update
-        # make partial fit of order 1 or 2
-        order = 1*(window<3) + 2*(window>=3)
-        polycf_left = np.polyfit(np.concatenate(left_lane_inds[1]),
-                                 np.concatenate(left_lane_inds[0]), order)
-        # predict position at next window
-        leftx_current = np.int(np.round(np.polyval(polycf_left, 0.5 * (win_y_low + win_y_high)-window_height)))
+        # perform a fit to predict the window tendency, if a minimum number of points is present and the y span allows
+        if (np.size(np.concatenate(left_lane_inds[1])) >= minpix) and \
+                (np.max(np.concatenate(left_lane_inds[1]))- np.min(np.concatenate(left_lane_inds[1]))) > minpix:
+            # make partial fit of order 1 or 2
+            order = 1*(window<3) + 2*(window>=3)
+            polycf_left = np.polyfit(np.concatenate(left_lane_inds[1]),
+                                     np.concatenate(left_lane_inds[0]), order)
+            # predict position at next window
+            leftx_current = np.int(np.round(np.polyval(polycf_left, 0.5 * (win_y_low + win_y_high)-window_height)))
 
         # right window
-        #x_detected_right = np.concatenate(x_detected_right)
-        #print(np.size(x_detected_right))
-        #if np.size(x_detected_right) >= minpix:
-        #    rightx_current = np.int64(np.mean(x_detected_right))
-        # make partial fit of order 1 or 2
-        order = 1*(window < 3) + 2*(window>=3)
-        polycf_right = np.polyfit(np.concatenate(right_lane_inds[1]),
-                                  np.concatenate(right_lane_inds[0]), order)
-        # predict position at next window
-        rightx_current = np.int(np.round(np.polyval(polycf_right, 0.5 * (win_y_low + win_y_high) - window_height)))
+        # perform a fit to predict the window tendency, if a minimum number of points is present and the y span allows
+        if (np.size(np.concatenate(right_lane_inds[1])) >= minpix) and \
+                (np.max(np.concatenate(right_lane_inds[1]))- np.min(np.concatenate(right_lane_inds[1]))) > minpix:
+            # make partial fit of order 1 or 2
+            order = 1*(window < 3) + 2*(window>=3)
+            polycf_right = np.polyfit(np.concatenate(right_lane_inds[1]),
+                                      np.concatenate(right_lane_inds[0]), order)
+            # predict position at next window
+            rightx_current = np.int(np.round(np.polyval(polycf_right, 0.5 * (win_y_low + win_y_high) - window_height)))
 
-        # keep this plot ==> cool to explaine procedure!
+        # keep this plot ==> cool to explain procedure!
         PLOT_METHOD = False
-        if PLOT_METHOD and (window == 2):
+        if PLOT_METHOD and (window == 4):
+            stop()
             plt.figure(num=1)
             plt.clf()
             plt.imshow(out_img)
@@ -678,6 +673,7 @@ def find_lane_xy_frommask(mask_input, nwindows=9, margin=100, minpix=50, NO_IMG=
             plt.plot(np.repeat(leftx_current, 2), np.repeat(0.5 * (win_y_low + win_y_high) - window_height,2), 'b+')
             plt.plot(np.polyval(polycf_right, y), y, 'r--')
             plt.plot(np.repeat(rightx_current, 2), np.repeat(0.5 * (win_y_low + win_y_high) - window_height,2), 'b+')
+            plt.pause(20)
             stop()
 
 

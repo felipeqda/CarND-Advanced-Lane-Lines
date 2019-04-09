@@ -34,7 +34,7 @@ from moviepy.editor import VideoFileClip
 # image display
 from P2_subroutines import plotNimg, weighted_img, restrict2ROI, closePolygon, get_plot, gaussian_blur
 # calibration and perspective transformation
-from P2_subroutines import calibrateCamera, Warp2TopDown
+from P2_subroutines import calibrateCamera, undistort, Warp2TopDown
 # thresholding/gradients
 from P2_subroutines import abs_sobel_thresh, mag_thresh, dir_thresh, lanepxmask
 # mask processing and fitting
@@ -45,8 +45,9 @@ from P2_subroutines import LaneLine, LaneLine4Video, weight_fit_cfs
 """Step 1: Single-frame pipeline """
 """------------------------------------------------------------"""
 
+
 #1) Single frame script for testing/development/debugging
-def single_frame_analysis(input_image,
+def single_frame_analysis(input_image, SHOW_CALIBRATION = True,
                           SHOW_COLOR_GRADIENT = True, SHOW_WARP = True,  SHOW_FIT = True,
                           sobel_kernel = 7):
     """  Single frame pipeline with detailed information, for development of steps and debugging of single frames
@@ -61,7 +62,7 @@ def single_frame_analysis(input_image,
     if np.ndim(input_image) == 0: #string input
         img_basename = os.path.basename(input_image).split('.jpg')[0]
         output_dir = 'output_images' + os.sep + img_basename + os.sep
-        if SHOW_COLOR_GRADIENT or SHOW_WARP or SHOW_FIT:
+        if SHOW_CALIBRATION or SHOW_COLOR_GRADIENT or SHOW_WARP or SHOW_FIT:
             os.makedirs(output_dir, exist_ok=True)
         # read image and get dimensions
         img_RGB = mpimg.imread(input_image)
@@ -82,7 +83,14 @@ def single_frame_analysis(input_image,
 
     """I) apply calibration"""
     cal_mtx, dist_coef = calibrateCamera(FORCE_REDO=False)
-    img_RGB = cv2.undistort(img_RGB, cal_mtx, dist_coef, None, cal_mtx)
+    if SHOW_CALIBRATION:
+        plotNimg([img_RGB, undistort(img_RGB, cal_mtx, dist_coef)],
+                 ['RGB - input', 'RGB - after calibration'],
+                 [None, None],
+                 'Lens Calibration', fig_num=1)
+        if SAVE_PLOTS: plt.savefig(output_dir + img_basename + '_calibration.png')
+    #replace with calibrated image
+    img_RGB = undistort(img_RGB, cal_mtx, dist_coef)
 
 
     """II) color transformations & gradients """
@@ -504,7 +512,7 @@ class ProcessFrame:
         Ny, Nx, _ = np.shape(frame)
 
         """I) apply calibration"""
-        frame = cv2.undistort(frame, self.cal_mtx, self.dist_coef, None, self.cal_mtx)
+        frame = undistort(frame, self.cal_mtx, self.dist_coef)
 
         """II) Get warped detection masks"""
         # warp before detect ==> less blurry
