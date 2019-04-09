@@ -192,7 +192,6 @@ def undistort(image, cal_mtx, dist_coef):
 """ Masking and Thresholding Image or Gradient                 """
 """------------------------------------------------------------"""
 
-
 # 1) Thresholding tools, as developed in quizzes
 # ---------------------------------------------------------------------
 def abs_sobel_thresh(img, orient='y', thresh=(0, 255),
@@ -230,8 +229,6 @@ def abs_sobel_thresh(img, orient='y', thresh=(0, 255),
         mask = (sobel_byte > thresh[0]) & (sobel_byte < thresh[1])
     # 6) Return this mask as your binary_output image
     return mask
-
-
 # ---------------------------------------------------------------------
 def mag_thresh(img, sobel_kernel=3, thresh=(0, 255), GRAY_INPUT=False):
     # Define a function that applies Sobel x and y,
@@ -255,7 +252,6 @@ def mag_thresh(img, sobel_kernel=3, thresh=(0, 255), GRAY_INPUT=False):
     mask = (grad_byte > thresh[0]) & (grad_byte < thresh[1])
     # 6) Return this mask as your binary_output image
     return mask
-
 
 # ---------------------------------------------------------------------
 def dir_thresh(img, sobel_kernel=3, thresh=(0, np.pi / 2),
@@ -287,7 +283,6 @@ def dir_thresh(img, sobel_kernel=3, thresh=(0, np.pi / 2),
     # 6) Return this mask as your binary_output image
     return mask
 
-
 # ---------------------------------------------------------------------
 # 2) adopted mask processing strategy
 # ---------------------------------------------------------------------
@@ -297,7 +292,6 @@ def lanepxmask(img_RGB, sobel_kernel=7):
         and output the detected lane pixels mask, alongside an RGB composition of the 3 sub-masks (added)
         for visualization
     """
-
     MORPH_ENHANCE = True
 
     # morphological kernel
@@ -312,14 +306,16 @@ def lanepxmask(img_RGB, sobel_kernel=7):
     S_mask = (img_HLS[:, :, 2] > S_thd[0]) & (img_HLS[:, :, 2] <= S_thd[1])
     # reject shadows from S mask
     S_mask[img_HLS[:,:,1] < 50] = False
-
     # CLOSE to close gaps
     if MORPH_ENHANCE:
         S_mask = cv2.morphologyEx(255 * np.uint8(S_mask), cv2.MORPH_CLOSE, kernel, iterations=2) > 0
         S_mask = cv2.dilate(255 * np.uint8(S_mask), kernel) > 0
+
     # high S x-gradient
     S_gradx_mask = abs_sobel_thresh(img_HLS[:, :, 2], orient='x', thresh=(20, 100),
                                     sobel_kernel=sobel_kernel, GRAY_INPUT=True)
+    # reject shadows from S x-gracient mask
+    S_mask[img_HLS[:,:,1] < 50] = False
     # CLOSE to close gaps
     if MORPH_ENHANCE:
         S_gradx_mask = cv2.morphologyEx(255 * np.uint8(S_gradx_mask), cv2.MORPH_CLOSE, kernel, iterations=2) > 0
@@ -335,8 +331,10 @@ def lanepxmask(img_RGB, sobel_kernel=7):
     # remove noise and dilate to block the border from appearing in gradient
     dark = cv2.morphologyEx(255 * np.uint8((dark_borders == 255) | (dark_regions == 255)), cv2.MORPH_OPEN, kernel, iterations=3)
     dark = cv2.dilate(dark,np.ones([sobel_kernel, sobel_kernel]), iterations=2)
-    # sanity check: no white points removed :)
+    # sanity check: no white points removed
     white = cv2.inRange(gaussian_blur(img_RGB, 5), np.uint8([180, 180, 180]), np.uint8([255, 255, 255]))
+    #yellow = cv2.inRange(gaussian_blur(img_RGB, 5), np.uint8([160, 160, 120]), np.uint8([255, 255, 0]))
+    yellow = (img_RGB[:, :, 0] > 160) & (img_RGB[:, :, 1] > 160) & (img_RGB[:, :, 2] < 120)
     dark[white == 255] = 0 # do not remove
     # remove dark border from gradient
     gradx_mask[dark == 255] = False
@@ -344,10 +342,11 @@ def lanepxmask(img_RGB, sobel_kernel=7):
     if MORPH_ENHANCE:
         gradx_mask = cv2.morphologyEx(255 * np.uint8(gradx_mask), cv2.MORPH_OPEN, kernel, iterations=2) > 0
 
-    # propagate changes to S mask
+    # propagate changes to S-based masks, enhance white and yellow
     S_mask[white == 255] = True
+    S_mask[yellow] = True
     S_mask[dark_regions == 255] = False
-
+    S_gradx_mask[dark_regions == 255] = False
 
     # build main lane pixel mask
     mask = S_gradx_mask | gradx_mask | S_mask

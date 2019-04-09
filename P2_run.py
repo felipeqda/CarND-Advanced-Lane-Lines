@@ -63,7 +63,7 @@ output_video = os.path.basename(input_video).split('.mp4')[0]+'_output.mp4'
 # processing flags
 QUICK_TEST = False
 t_beg, t_end = (0, 4)  #(20, 24) for projectvideo
-PROCESS_VIDEO = True
+PROCESS_VIDEO = False
 
 
 # applies process_image frame by frame
@@ -84,9 +84,12 @@ if PROCESS_VIDEO:
 
 # BENCHMARKS
 # 1) project video
-# single_frame_analysis(clip_in.get_frame(41.801), SHOW_COLOR_GRADIENT = True, SHOW_WARP = False,  SHOW_FIT = True)
+#single_frame_analysis(clip_in.get_frame(41.801), SHOW_CALIBRATION=False, SHOW_COLOR_GRADIENT = True, SHOW_WARP = False,  SHOW_FIT = True)
 # plt.imshow(processing_pipeline(clip_in.get_frame(41.801)))
 # take video inputs from (20, 24) s!
+single_frame_analysis(clip_in.get_frame(40.6), SHOW_CALIBRATION=False, SHOW_COLOR_GRADIENT = True, SHOW_WARP = False,  SHOW_FIT = True)
+# plt.imshow(processing_pipeline(clip_in.get_frame(41.801)))
+
 
 # 2) challenge video
 #single_frame_analysis(clip_in.get_frame(0.0), SHOW_COLOR_GRADIENT = True, SHOW_WARP = False,  SHOW_FIT = True)
