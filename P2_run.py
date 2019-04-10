@@ -62,7 +62,7 @@ output_video = os.path.basename(input_video).split('.mp4')[0]+'_output.mp4'
 
 # processing flags
 QUICK_TEST = False
-t_beg, t_end = (0, 4)  #(20, 24) for projectvideo
+t_beg, t_end = (37, 42)  #benchmarks == (37,42) or (20, 24) for projectvideo
 PROCESS_VIDEO = True
 
 

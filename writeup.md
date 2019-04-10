@@ -81,11 +81,11 @@ Below an example of the effect of the undistortion in an example image. The effe
 
 ![alt text][image3]
 
-This function is called at the pipeline whenever an image is loaded or a frame is input to the processing function. (Cf. _P2_AdvancedLaneFinding.py_: lines 93, 515).
+This function is called at the pipeline whenever an image is loaded or a frame is input to the processing function. (Cf. _P2_AdvancedLaneFinding.py_: lines 93, 530).
 
 #### 2. Describe how (and identify where in your code) you used color transforms, gradients or other methods to create a thresholded binary image.  Provide an example of a binary image result.
 
-A combination of color and gradient thresholds to generate a binary image mask for lane detection is performed in the routine `lanepxmask()`, at lines 295-359 of _P2_subroutines.py_. Tools based on the methods used in the quizzes are used, e.g. `abs_sobel_thresh()`, in the same file. The rationale is to convert from RGB to grayscale/HLS and get the points with high S channel values, high S channel gradients and also high grayscale gradients. Additional steps masking shadows (low L values) are used to increase robustness to shadows and dark patches in the images. (This was not necessary for the test images but added later as testing progressed with the videos). Another aspect which is different from the base algorithm is the use of [morphological operators](https://docs.opencv.org/3.0-beta/doc/py_tutorials/py_imgproc/py_morphological_ops/py_morphological_ops.html) to enhance the masks, e.g. by rejecting small clusters of pixels (_morphological opening_) or expanding borders (_dilation_).  
+A combination of color and gradient thresholds to generate a binary image mask for lane detection is performed in the routine `lanepxmask()`, at lines 290-360 of _P2_subroutines.py_. Tools based on the methods used in the quizzes are used, e.g. `abs_sobel_thresh()`, in the same file. The rationale is to convert from RGB to grayscale/HLS and get the points with high S channel values, high S channel gradients and also high grayscale gradients. Additional steps masking shadows (low L values) are used to increase robustness to shadows and dark patches in the images. (This was not necessary for the test images but added later as testing progressed with the videos). Another aspect which is different from the base algorithm is the use of [morphological operators](https://docs.opencv.org/3.0-beta/doc/py_tutorials/py_imgproc/py_morphological_ops/py_morphological_ops.html) to enhance the masks, e.g. by rejecting small clusters of pixels (_morphological opening_) or expanding borders (_dilation_).  
 
 The figure belows illustrates such a mask. The RGB composition has the S channel mask as R, grayscale x-gradient as R and S-channel x-gradient mask as B. The binary output next is shown next. The "ROI restricted" case models the effect of warping to the "bird's eye" perspective and the final plot is the warped mask, as will be explained later on (cf. **II.4**).
 
@@ -128,7 +128,7 @@ The tracking of the lane pixels and fitting of a polynomial is done in `find_lan
 The routine `find_lane_xy_frommask()` makes a sliding window search from bottom to top of the mask, starting from a profile of the lower part of the image to locate the pixels which are promissing starting points, as in the quiz. Two noteworthy modifications were made to the logic implemented in the quiz:
 - _Region labeling_: First, the most reliable pixels are found using `cv2.morphologyEx()` and `cv2.MORPH_OPEN`, which combined apply the [morphological open](https://docs.opencv.org/3.0-beta/doc/py_tutorials/py_imgproc/py_morphological_ops/py_morphological_ops.html) operation, which rejects noise. By applying `cv2.connectedComponents` to this "reliable pixel" mask, connected regions of higher reliability are identified. Their indices are stored and, during the pixel search, it is assured that they are not separated by the sliding window.
 
-- _Window search position update logic_: In the quiz, the center of the next window of each side was determined from the centroid of the pixels in the previous window. This is effective for low curvatures but leads the window to lose track for larger curvatures or wide gaps. Instead, at each step, a fit of the trend of the local windows is performed (unless not enough pixels are gathered so far) and the position of the next window's center is predicted, and this is used as the center of the next iteration. This is done in (_P2_subroutines.py_: lines 642-660) and results in the predictions shown below:   
+- _Window search position update logic_: In the quiz, the center of the next window of each side was determined from the centroid of the pixels in the previous window. This is effective for low curvatures but leads the window to lose track for larger curvatures or wide gaps. Instead, at each step, a fit of the trend of the local windows is performed (unless not enough pixels are gathered so far) and the position of the next window's center is predicted, and this is used as the center of the next iteration. This is done in (_P2_subroutines.py_: lines 640-662) and results in the predictions shown below:   
 
 |<img width=480px height=0px/> |<img width=480px height=0px/>|
 |:----------------------------:|:---------------------------:|
@@ -173,8 +173,6 @@ The value is also annotated to the output frame.
 #### 6. Provide an example image of your result plotted back down onto the road such that the lane area is identified clearly.
 
 This step is implemented in the routine `getlane_annotation()` in _P2_subroutines.py_. Given two polynomials, one for each of the lanes, a region in the "bird's eye" view is generated using `cv2.fillPoly()` and warped back into image domain using `Perspective.unwarp()` described in **II.3** 
-
-I implemented this step in lines # through # in my code in `yet_another_file.py` in the function `map_lane()`.  Here is an example of my result on a test image:
 
 As described in **II.5**, the curvature and the offset with respect to the lane center are annotated to the output frames. An arrow indicating the direction of the curve, and color-coded to it's intensity is also shown. Below some examples of output frames, computed for the test images.
 

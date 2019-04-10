@@ -471,8 +471,23 @@ class ProcessFrame:
         left, right, left_right_pxs, _ = find_lane_xy_frommask(mask_aux, NO_IMG=True)
 
         # deal with special cases
-        # if this happens, the lines cross at some point ==> high discrepancy case
-        if left.cf[2] > right.cf[2]:
+        # lines have contradictory inclinations
+        if np.sign(left.cf[0]) != np.sign(right.cf[0]):
+            # decide on the most reliable
+            w_compare, _ = weight_fit_cfs(left, right)
+            best = [left, right][np.argmax(w_compare)]
+            worst = [left, right][1 - np.argmax(w_compare)]
+            worst.cf[0:2] = best.cf[0:2]  # search for parallel line
+            worst.cf[2] = worst.x_bottom - np.polyval(np.concatenate((worst[0:2], [0])), np.shape(mask_warped)[0])
+            # remove top of the image (unreliable)
+            mask_warped[0:max((np.min(best.y_pix),150)), :] = 0
+            # try a new fit from these coefficients and the pre-conditioned mask
+            cf_1, cf_2 = left.cf, right.cf
+            # update, fitting from these coefficients
+            left, right, left_right_pxs, _ = find_lane_xy_frompoly(mask_aux, cf_1, cf_2, NO_IMG=True)
+
+        # if this happens, the lines cross at some point
+        elif left.cf[2] > right.cf[2]:
             # decide on the most reliable
             w_compare, _ = weight_fit_cfs(left, right)
             best = [left, right][np.argmax(w_compare)]
@@ -656,7 +671,7 @@ class ProcessFrame:
         SMOOTH = True
         # smooth coefficients over buffer for display
         if SMOOTH:
-            left_currentframe.cf, right_currentframe.cf = self.leftlane.cfs_median, self.rightlane.cfs_median
+            left_currentframe.cf, right_currentframe.cf = self.leftlane.cfs_avg, self.rightlane.cfs_avg
             # use average uncertainties to model effect of smoothing filter
             left_currentframe.MSE, left_currentframe.Npix = self.leftlane.cfs_uncertainty_avg[0:2]
             right_currentframe.MSE, right_currentframe.Npix = self.rightlane.cfs_uncertainty_avg[0:2]
