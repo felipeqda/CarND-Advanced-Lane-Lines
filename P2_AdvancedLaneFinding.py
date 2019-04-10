@@ -738,7 +738,8 @@ class ProcessFrame:
         plt.text(Nx/2, 40, r"$R_{curve} = $",#+"{:.2f} [m]".format(curvature),
                  horizontalalignment='left',verticalalignment='center',
                  fontsize=14, weight='bold', color='w')
-        if curvature > self.min_rcurve:
+        # mark, if sure
+        if (curvature > self.min_rcurve) and (np.sign(cf_meters_left[0]) == np.sign(cf_meters_right[0])):
             plt.text(Nx/2+80, 40, "{:.2f} [m]".format(curvature),
                      horizontalalignment='left',verticalalignment='center',
                      fontsize=14, weight='bold', color=self.my_cmp(1.0-inv_Curv))

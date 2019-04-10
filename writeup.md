@@ -40,7 +40,7 @@ The goals / steps of this project are the following:
 
 ## [Rubric](https://review.udacity.com/#!/rubrics/571/view) Points
 
-This section goes throught the rubric points one at a time and described how they were performed with example outputs, whenever applicable.
+This section goes through the rubric points one at a time and described how they were performed with example outputs, whenever applicable.
 
 ---
 
@@ -87,7 +87,7 @@ This function is called at the pipeline whenever an image is loaded or a frame i
 
 A combination of color and gradient thresholds to generate a binary image mask for lane detection is performed in the routine `lanepxmask()`, at lines 295-359 of _P2_subroutines.py_. Tools based on the methods used in the quizzes are used, e.g. `abs_sobel_thresh()`, in the same file. The rationale is to convert from RGB to grayscale/HLS and get the points with high S channel values, high S channel gradients and also high grayscale gradients. Additional steps masking shadows (low L values) are used to increase robustness to shadows and dark patches in the images. (This was not necessary for the test images but added later as testing progressed with the videos). Another aspect which is different from the base algorithm is the use of [morphological operators](https://docs.opencv.org/3.0-beta/doc/py_tutorials/py_imgproc/py_morphological_ops/py_morphological_ops.html) to enhance the masks, e.g. by rejecting small clusters of pixels (_morphological opening_) or expanding borders (_dilation_).  
 
-The figure belows illustrates such a mask. The RGB composition has the S channel mask as R, grayscale x-gradient as R and S-channel x-gradient mask as B. The binary output next is shown next. The "ROI restricted" case models the effect of warping to the "bird's eye" perspective and the final plot is the warped mask, as will be explained later on.
+The figure belows illustrates such a mask. The RGB composition has the S channel mask as R, grayscale x-gradient as R and S-channel x-gradient mask as B. The binary output next is shown next. The "ROI restricted" case models the effect of warping to the "bird's eye" perspective and the final plot is the warped mask, as will be explained later on (cf. **II.4**).
 
 ![alt text][image4]
 
@@ -205,6 +205,13 @@ The annotated video is available [here](./project_video_output.mp4).
 
 #### 1. Briefly discuss any problems / issues you faced in your implementation of this project.  Where will your pipeline likely fail?  What could you do to make it more robust?
 
-Here I'll talk about the approach I took, what techniques I used, what worked and why, where the pipeline might fail and how I might improve it if I were going to pursue this project further.  
+The new pipeline is based on more advanced computer vision concepts, including the color space transformations, gradient operations and perspective transformations. This added considerably to the robustness, especially in case of changing illumination and poor RGB-contrast conditions. The combination of saturation(S)-channel thresholds and magnitude of the grayscale gradient in the x-direction proved to be a good starting point. The reason is that the S channel is more independent of illumination, which proves to be an important factor for grayscale-based approaches (used in the previous project). The pipeline was improved by adding morphologic operators for mask processing,e.g. to reject noise.    
 
-As indicated by the excerpt of challenge...
+Frames with dark spots, and especially dark vertical lines (as in the challenge video) are challenging for a pipeline based on these methods, as the dark line has often more contrast to the asphalt than the lane markings itself, and is tracked instead of the lane marking. Some shadows in the asphalt are also seen to have high S values, and thus are not separated from the lanes by the S-threshold alone. In these more demanding frames, e.g. with shadows and dark lines, a masking procedure based on the luminance (L) channel proved to be helpful, though not fail-proof. These allowed at least the first part of the challenge video to be annotated in a somewhat satisfactory manner (the result of the initial pipeline was a complete failure).  
+
+In general, high curvature conditions are also challenging for the lane tracking approach. The window search based on the average of the previous window was found to be "too slow" in predicting the position of the next window center in the x dimension. This was improved by considering the _connected regions_ and the _partial fit_ of the masks' pixels (cf. **II.4**) to track the curvature in a more "aggressive" way, allowing for tracking steeper curves.      
+
+Some of the these difficulties clearly remain. The final version of the pipeline would still tend to lose track of the lanes and track dark lines or asphalt edges instead of the lane markings in case in which the lines are very prominent. The situation of a tunnel under a bridge is tricky due to the proximity of the lane marking, asphalt edge and concrete wall, all of which have similar colors and brightness. Situations with several shadows in the lane are still challenging, and the case of a non-empty lane (i.e. a car or object in front of the car) is not accounted for.
+
+
+If the project were going to be pursued further, some improvement could probably still be attained by adapting the masks to deal with problematic frames (this would require a deeper analysis of why the frames fail in the challenge videos, given more time). Furthermore, a more robust fitting strategy could be an improvement, considering more of the problematic cases (e.g. curvatures have different signs) and trying to use information from other frames or iterative fitting strategies (e.g. with different masks more suitable for a particular case or aiding the fitting by modifying the mask or giving better first guesses for the polynomial search). The implementation of different algorithms, such as the ones pointed out in the "bonus round" of the material would also be a desirable improvement.    
