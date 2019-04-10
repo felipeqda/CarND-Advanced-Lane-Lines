@@ -57,12 +57,12 @@ image_list = ['straight_lines1.jpg',
 """ Video processing                                           """
 """------------------------------------------------------------"""
 test_videos = ['project_video.mp4', 'challenge_video.mp4', 'harder_challenge_video.mp4']
-input_video = test_videos[0] # choose video
+input_video = test_videos[2] # choose video
 output_video = os.path.basename(input_video).split('.mp4')[0]+'_output.mp4'
 
 # processing flags
-QUICK_TEST = False
-t_beg, t_end = (37, 42)  #benchmarks == (37,42) or (20, 24) for projectvideo
+QUICK_TEST = True
+t_beg, t_end = (0, 6)  #benchmarks == (37,42) or (20, 24) for projectvideo
 PROCESS_VIDEO = True
 
 
@@ -89,6 +89,8 @@ if PROCESS_VIDEO:
 # take video inputs from (20, 24) s!
 #single_frame_analysis(clip_in.get_frame(40.6), SHOW_CALIBRATION=False, SHOW_COLOR_GRADIENT = True, SHOW_WARP = False,  SHOW_FIT = True)
 # plt.imshow(processing_pipeline(clip_in.get_frame(41.801)))
+#single_frame_analysis(clip_in.get_frame(22.1), SHOW_CALIBRATION=False, SHOW_COLOR_GRADIENT = False, SHOW_WARP = False,  SHOW_FIT = True)
+
 
 
 # 2) challenge video
